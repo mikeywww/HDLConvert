@@ -8,7 +8,7 @@ def save(stage, completed, files, tests, issues, next_step):
     old = path.read_text(encoding='utf-8')
     history = old.split('## 阶段历史\n', 1)[-1].strip()
     return checkpoint('HDL Upgrade ' + stage, completed, files, tests, issues,
-        next_step + '\nFixed workspace D:/WORK/PRJ/HDLConvert. Original requirements: build/HDL_UPGRADE_REQUEST.txt. Never publish a new EXE Release without explicit user permission. Existing tatus is user-owned.',
+        next_step + '\nFixed workspace D:/WORK/PRJ/HDLConvert. Original requirements: build/HDL_UPGRADE_REQUEST.txt. Future releases require explicit user permission; v2.0.1 publication was authorized on 2026-09-19. Obsolete local root files are archived in build/cleanup-20260919/.',
         history + '\n- ' + stage + ': ' + tests, mail='No email for intermediate checkpoint; notify only on important feature completion or observed usage exhaustion.')
 
 if __name__ == '__main__':

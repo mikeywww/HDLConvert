@@ -81,9 +81,11 @@ class EditorApp:
     def __init__(self,root,dnd_type=None):
         self.root=root;self.busy=False;self.events=queue.Queue();self.path=None;self.output_language=None
         root.title('HDLConvert')
-        width=min(1320,max(900,root.winfo_screenwidth()-80))
-        height=min(900,max(650,root.winfo_screenheight()-100))
-        root.geometry(f'{width}x{height}');root.minsize(900,650)
+        screen_width=root.winfo_screenwidth();screen_height=root.winfo_screenheight()
+        width=min(1320,max(900,screen_width-80))
+        height=min(1050,max(700,screen_height-50))
+        left=max(0,(screen_width-width)//2)
+        root.geometry(f'{width}x{height}+{left}+0');root.minsize(900,700)
         style=ttk.Style(root)
         if 'vista' in style.theme_names():style.theme_use('vista')
         style.configure('.',font=('Microsoft YaHei UI',10))

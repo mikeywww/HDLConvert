@@ -33,11 +33,11 @@ python hdlconvert.py --gui
 
 ## GUI
 
-GUI 使用 tkinter/ttk，保持 Windows 10 原生桌面工具风格，界面文字为中文。程序启用 Windows Per-Monitor DPI 感知并使用微软雅黑 UI 字体，使高 DPI 缩放下的中文显示更清晰；默认窗口尺寸会按屏幕调整，确保底部状态栏可见。工作流：
+GUI 使用 tkinter/ttk，保持 Windows 10 原生桌面工具风格，界面文字为中文。程序启用 Windows Per-Monitor DPI 感知并使用微软雅黑 UI 字体，使高 DPI 缩放下的中文显示更清晰；默认窗口高度按屏幕高度减去 50 调整，上限为 1050，并靠屏幕顶部放置，为底部状态栏留出更多空间。工作流：
 
-1. 拖入 `.vhd`、`.vhdl`、`.v` 或 `.sv`，也可点击 Open 或粘贴代码。
-2. 检查自动识别的 Source Language，选择 Target Language。
-3. 点击 Convert 或按 F5。
+1. 拖入 `.vhd`、`.vhdl`、`.v` 或 `.sv`，也可打开文件或粘贴代码。
+2. 检查自动识别的源语言，选择目标语言。
+3. 点击转换或按 F5。
 4. 选择输出编码（默认 GB2312，可选 GBK、UTF-8），查看警告/日志，然后复制结果或另存为。
 
 左右编辑区提供行号、基本语法高亮、撤销/重做和 `Ctrl+A/C/V/Z/Y`。编辑器一次打开一个文件；批量转换使用 CLI。

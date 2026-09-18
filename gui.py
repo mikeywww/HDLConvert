@@ -73,8 +73,8 @@ class ConverterApp:
     def __init__(self, root, dnd_type=None):
         self.root = root
         root.title('VHDL → SystemVerilog Converter')
-        root.geometry('1200x820')
-        root.minsize(900, 650)
+        root.geometry('1200x900')
+        root.minsize(900, 700)
         self.files = FileQueue()
         self.events = queue.Queue()
         self.busy = False

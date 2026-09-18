@@ -111,4 +111,6 @@ Both reference Git worktrees remained clean. Their code was not copied into the 
 
 ## Limits of acceptance
 
+Final 2.0.1 publication check (2026-09-19): `scripts/verify_release.py` passed once against the final taller-window EXE, including isolated native Tk/tkdnd, GBK input, Unicode paths, conversion directions and failed-output preservation. Prior GUI smoke passed; measured default window height increased from 822 to 878 in the validation environment. Tracked paths and content contain no former project name. Final SHA256: `ee78d904898fbd14982ea81e679662a19f9b3af268403bc68b2d32a1f682c6a5`.
+
 Core, CLI, Windows GUI and documented subset are delivered and tested. No actual customer Vivado project was provided, so the requested 80–90% practical RTL coverage goal remains unmeasured. Unsupported constructs and conservative rejections are documented in README; warning outputs require review. No claim of full VHDL/SV semantic equivalence is made.
