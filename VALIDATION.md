@@ -111,6 +111,8 @@ Both reference Git worktrees remained clean. Their code was not copied into the 
 
 ## Limits of acceptance
 
+HDLConvert 2.0.2 local packaging check (2026-09-19): the targeted DDR3 VHDL-to-Verilog regression passed, generated Verilog passed Icarus Verilog-2005 parse/elaboration, and the final frozen EXE passed one isolated verification including the DDR3 conversion. Artifact: 9,770,726 bytes; SHA256 `a10d782a233f9332d5e3d7d33aedf10317e1163065d6162b77b58fae317b6496`. This candidate was not uploaded or published.
+
 Final 2.0.1 publication check (2026-09-19): `scripts/verify_release.py` passed once against the final taller-window EXE, including isolated native Tk/tkdnd, GBK input, Unicode paths, conversion directions and failed-output preservation. Prior GUI smoke passed; measured default window height increased from 822 to 878 in the validation environment. Tracked paths and content contain no former project name. Final SHA256: `ee78d904898fbd14982ea81e679662a19f9b3af268403bc68b2d32a1f682c6a5`.
 
 Core, CLI, Windows GUI and documented subset are delivered and tested. No actual customer Vivado project was provided, so the requested 80–90% practical RTL coverage goal remains unmeasured. Unsupported constructs and conservative rejections are documented in README; warning outputs require review. No claim of full VHDL/SV semantic equivalence is made.

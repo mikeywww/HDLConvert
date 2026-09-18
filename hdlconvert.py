@@ -39,7 +39,7 @@ def main(argv=None):
         attach_cli_streams()
     argv = raw_args
     parser = argparse.ArgumentParser(description='HDLConvert: VHDL / Verilog / SystemVerilog')
-    parser.add_argument('--version', action='version', version='HDLConvert 2.0.1')
+    parser.add_argument('--version', action='version', version='HDLConvert 2.0.2')
     parser.add_argument('--licenses', action='store_true', help='show bundled third-party notices')
     parser.add_argument('--self-test', type=Path, metavar='DIRECTORY', help='test bundled GUI/DnD and conversion in a temporary subdirectory')
     parser.add_argument('inputs', nargs='*', type=Path)

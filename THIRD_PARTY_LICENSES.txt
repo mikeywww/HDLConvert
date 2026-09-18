@@ -1,4 +1,4 @@
-HDLConvert 2.0.1 - bundled third-party notices
+HDLConvert 2.0.2 - bundled third-party notices
 Runtime redistribution notices; reference repositories are NOT bundled.
 
 

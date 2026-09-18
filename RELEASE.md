@@ -1,10 +1,10 @@
-# HDLConvert 2.0.1 — Windows x64
+# HDLConvert 2.0.2 local candidate — Windows x64
 
-发布文件：`dist/HDLConvert.exe`。这一个文件同时提供 GUI 和 CLI，无需安装 Python 或复制 DLL 目录。
+本地候选文件：`dist/HDLConvert.exe`，尚未发布。这一个文件同时提供 GUI 和 CLI，无需安装 Python 或复制 DLL 目录。
 
-- 文件大小：**9,764,246 字节**（9.76 MB / 9.31 MiB），低于 20 MB 目标。
-- SHA-256：`ee78d904898fbd14982ea81e679662a19f9b3af268403bc68b2d32a1f682c6a5`
-- 文件/产品版本：2.0.1。
+- 文件大小：**9,770,726 字节**（9.77 MB / 9.32 MiB），低于 20 MB 目标。
+- SHA-256：`a10d782a233f9332d5e3d7d33aedf10317e1163065d6162b77b58fae317b6496`
+- 文件/产品版本：2.0.2。
 - 平台：Windows x64；验证环境为 Windows 11 x64。
 - 签名状态：未进行 Authenticode 签名，Windows 可能显示未知发布者提示。
 
@@ -25,9 +25,9 @@
 
 ## 发布验证
 
-- 上一候选版完整回归 **72 项通过**；本次新增 1 项编码测试，并执行受影响的 42 项测试。内容相关测试均通过，两个仅涉及黄金文件末尾空白的断言修正后定向复测通过；未重复无关测试。
-- `python scripts/verify_release.py`：通过。脚本把 EXE 复制到带中文和空格的独立目录，PATH 只保留 Windows System32，并移除 Python/Tcl/venv 环境变量。
-- 冻结验证包含版本、内嵌许可、中文 GUI、默认 GB2312 输出、真实 Tk/tkdnd、GBK 文件读取、Unicode 路径拖放、语言识别、编辑器后台转换、VHDL→SV 黄金输出、SV→VHDL、Verilog→SV，以及转换失败时保留旧文件。
+- DDR3 定向回归测试 1 项通过；生成的 `ddr3_controller_500.v` 通过 Icarus Verilog-2005 解析和 elaboration。
+- `.venv\Scripts\python.exe scripts\verify_release.py`：通过。脚本把 EXE 复制到带中文和空格的独立目录，PATH 只保留 Windows System32，并移除 Python/Tcl/venv 环境变量。
+- 冻结验证包含版本、内嵌许可、中文 GUI、默认 GB2312 输出、真实 Tk/tkdnd、GBK 文件读取、Unicode 路径拖放、语言识别、编辑器后台转换、VHDL→SV 黄金输出、DDR3 VHDL→Verilog、SV→VHDL、Verilog→SV，以及转换失败时保留旧文件。
 - 另行启动无参数冻结 EXE，进程树中确认只有一个可见的 `HDLConvert` 窗口，没有控制台或额外任务栏窗口。
 - GUI 启用 Per-Monitor V2 DPI 感知和微软雅黑 UI 字体；默认尺寸按屏幕调整，最高 1320×1050，垂直预留 50。当前验证环境中默认窗口实测高度由 822 增至 878。
 - 最终高度调整后的 EXE 已再次通过一次隔离发布验证（2026-09-19）。源码入口及 Python 包统一使用 `hdlconvert`，产品名称为 `HDLConvert`。

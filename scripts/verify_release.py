@@ -30,7 +30,7 @@ def main():
                 raise RuntimeError(log[-1])
             return result
 
-        if '2.0.1' not in run(['--version']).stdout:
+        if '2.0.2' not in run(['--version']).stdout:
             raise RuntimeError('version missing')
         if 'MIT License' not in run(['--licenses']).stdout:
             raise RuntimeError('notices missing')
@@ -51,6 +51,13 @@ def main():
         run([verilog, '--target', 'systemverilog'])
         if 'module m' not in verilog.with_suffix('.sv').read_text(encoding='utf-8'):
             raise RuntimeError('Verilog-to-SV conversion failed')
+        ddr3 = folder/'ddr3_controller_500.vhd'
+        shutil.copy2(ROOT/'tests'/'vhdl'/'ddr3_controller_500.vhd', ddr3)
+        ddr3_out = folder/'ddr3_controller_500.v'
+        run([ddr3, '--target', 'verilog', '-o', ddr3_out])
+        ddr3_text = ddr3_out.read_text(encoding='gb2312')
+        if 'module ddr3_controller_500' not in ddr3_text or 'request_q[143:16]' not in ddr3_text:
+            raise RuntimeError('DDR3 VHDL-to-Verilog structured lowering failed')
         bad = folder/'bad.sv'
         bad.write_text('module broken(); initial #1 $finish; endmodule', encoding='utf-8')
         preserved = folder/'bad.vhd'
@@ -59,7 +66,7 @@ def main():
         if preserved.read_text(encoding='utf-8') != 'keep':
             raise RuntimeError('failed conversion overwrote output')
     (ROOT/'build'/'release-verification.log').write_text('\n'.join(log), encoding='utf-8')
-    print('PASS: isolated EXE version/licenses, native editor/DnD, GBK input, Unicode path, legacy golden output, new directions and failure preservation')
+    print('PASS: isolated EXE version/licenses, native editor/DnD, GBK input, Unicode path, legacy golden output, DDR3 VHDL-to-Verilog, new directions and failure preservation')
 
 
 if __name__ == '__main__':
