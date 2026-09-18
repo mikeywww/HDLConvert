@@ -1,5 +1,14 @@
 # Validation record
 
+## 2026-09-18 — Stage 13: initializer cleanup, Chinese encodings and local 2.0.1 EXE
+
+- Proven redundant combinational signal initializers are removed without generated comments or diagnostics. Process-variable initializers are removed only when every possible read is preceded by a whole assignment; read-before-write, incomplete branches and partial writes preserve them.
+- UTF-8/BOM, GB2312 and GBK source decoding now uses one shared path across CLI, GUI and dependency files; output remains UTF-8.
+- Frozen GUI retains the console/`hide-early` hybrid and additionally hides a console owned only by the frozen GUI process. Existing-terminal CLI output remains available.
+- `python -m unittest -q`: **72 tests passed** in one complete run after targeted failure correction. `python scripts/verify_release.py`: passed once, including frozen GBK GUI loading.
+- Local candidate `dist/HDLConverter.exe`: version 2.0.1, 9,765,776 bytes, SHA-256 `78f118d5ecae564ecd34ec08a2d90981fdd49caf7e429434a495414579dff5b1`.
+- Publication is intentionally paused. Do not push, tag, upload, or create a GitHub Release until the user explicitly approves this candidate.
+
 ## 2026-09-18 — HDL Converter 2.0 six-direction upgrade
 
 - Automated suite: **69 tests passed**, including all original VHDL-to-SV regressions and four real Icarus compile/simulation scenarios for the new paths.
@@ -13,13 +22,13 @@
 ## 2026-09-18 — Stage 11: declaration initializer / driver correction
 
 - Reproduced the old `logic ready_i = 1'b0; assign ready_i = a;` failure with Icarus: “Cannot perform procedural assignment ... because it is also continuously assigned.” Reproducer/log: `build/initializer_before.sv`, `build/initializer_before.log`.
-- Added conservative IR analysis for full, non-self-dependent combinational assignments. Their signal initializers are omitted with source-located warnings. Register and process-variable startup state is retained; process variables now use explicit static lifetime.
+- Added conservative IR analysis for full, non-self-dependent combinational assignments. Stage 13 later changed proven redundant removal to be silent and extended the analysis to process variables.
 - `python -m unittest -q`: **50 passed**, including **11 SV compiler/simulation tests**. New coverage: conditional ready expression, per-name declarations, process branch coverage, with-select, whole-array assignments, retained register/constant/variable values, incomplete/partial/generate/feedback cases, case-insensitive scoped names and strict output protection.
 - Generated `tests/vhdl/initializer_drivers.vhd` output compiled and simulated successfully; register starts at 1 before any clock and continues to operate after clock edges.
 - Vivado 2025.2 synthesis plus `report_drc -checks {MDRV-1}`: **0 errors, 0 critical warnings, 0 MDRV-1 violations**. Explicit post-synthesis assertion confirms register `INIT=1`. One ordinary warning removes unused temporary `v_reg`.
 - Reproduce: `python vhdl2sv.py tests/vhdl/initializer_drivers.vhd -o build/initializer_drivers.sv`, then `vivado -mode batch -source scripts/validate_initializers.tcl -log build/initializer_vivado.log -journal build/initializer_vivado.jou`.
 - Evidence: `build/initializer_vivado.log`, `build/initializer_synth/drivers.rpt`. Marker: `INITIALIZER_SYNTHESIS_PASS`.
-- Limit: removing a combinational initializer can change time-zero simulation; therefore warning and strict blocking are intentional. Partial targets, incomplete branches, feedback, generate and instance-bound drivers are not automatically stripped and still require review. This is not a complete multiple-driver/latch analysis.
+- Limit: partial targets, incomplete branches, feedback, generate and instance-bound drivers are not automatically stripped and still require review. This is not a complete multiple-driver/latch analysis.
 
 ## Stage 10 baseline
 

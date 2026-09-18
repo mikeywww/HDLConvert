@@ -30,7 +30,7 @@ def main():
                 raise RuntimeError(log[-1])
             return result
 
-        if '2.0.0' not in run(['--version']).stdout:
+        if '2.0.1' not in run(['--version']).stdout:
             raise RuntimeError('version missing')
         if 'MIT License' not in run(['--licenses']).stdout:
             raise RuntimeError('notices missing')
@@ -59,7 +59,7 @@ def main():
         if preserved.read_text(encoding='utf-8') != 'keep':
             raise RuntimeError('failed conversion overwrote output')
     (ROOT/'build'/'release-verification.log').write_text('\n'.join(log), encoding='utf-8')
-    print('PASS: isolated EXE version/licenses, native editor/DnD, Unicode path, legacy golden output, new directions and failure preservation')
+    print('PASS: isolated EXE version/licenses, native editor/DnD, GBK input, Unicode path, legacy golden output, new directions and failure preservation')
 
 
 if __name__ == '__main__':

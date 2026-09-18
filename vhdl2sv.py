@@ -2,15 +2,28 @@
 import argparse
 import logging
 import sys
+import ctypes
 from pathlib import Path
 from vhdl2sv.converter import convert_file
+
+
+def hide_private_gui_console():
+    """Hide only a console owned solely by this frozen GUI process."""
+    if sys.platform != 'win32' or not getattr(sys, 'frozen', False):
+        return
+    processes = (ctypes.c_ulong * 4)()
+    kernel = ctypes.windll.kernel32
+    count = kernel.GetConsoleProcessList(processes, len(processes))
+    window = kernel.GetConsoleWindow()
+    if window and count == 1:
+        ctypes.windll.user32.ShowWindow(window, 0)
 
 
 def main(argv=None):
     if argv is None and getattr(sys, 'frozen', False) and len(sys.argv) == 1:
         argv = ['--gui']
     parser = argparse.ArgumentParser(description='Lightweight HDL Converter: VHDL / Verilog / SystemVerilog')
-    parser.add_argument('--version', action='version', version='HDL Converter 2.0.0')
+    parser.add_argument('--version', action='version', version='HDL Converter 2.0.1')
     parser.add_argument('--licenses', action='store_true', help='show bundled third-party notices')
     parser.add_argument('--self-test', type=Path, metavar='DIRECTORY', help='test bundled GUI/DnD and conversion in a temporary subdirectory')
     parser.add_argument('inputs', nargs='*', type=Path)
@@ -33,6 +46,7 @@ def main(argv=None):
         run(args.self_test)
         return 0
     if args.gui:
+        hide_private_gui_console()
         from gui import run
         run()
         return 0

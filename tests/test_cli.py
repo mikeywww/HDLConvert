@@ -44,3 +44,13 @@ class CliTests(unittest.TestCase):
             result = subprocess.run([sys.executable, 'vhdl2sv.py', str(d/'a.vhd'), str(d/'a.vhdl')], capture_output=True, text=True)
             self.assertEqual(result.returncode, 1)
             self.assertIn('assign q = d', (d/'a.sv').read_text())
+
+    def test_gbk_and_gb2312_sources(self):
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            for encoding in ('gbk', 'gb2312'):
+                with self.subTest(encoding=encoding):
+                    source = Path(directory)/f'{encoding}.vhd'
+                    text = '-- 中文编码输入\n' + unit(body='q<=d;')
+                    source.write_bytes(text.encode(encoding))
+                    result = convert_file(source, strict=True)
+                    self.assertIn('module demo', result.text)

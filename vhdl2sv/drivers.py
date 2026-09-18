@@ -61,3 +61,67 @@ def read_names(nodes):
         names.update(t.lower for expr in expressions for t in expr if t.text.isidentifier())
         names.update(read_names(node.children))
     return names
+
+
+def redundant_variable_initializers(nodes, candidates):
+    """Return process variables whose initializer is never read.
+
+    The analysis is intentionally conservative.  A whole ``:=`` assignment
+    makes a variable available to following statements.  Branches only carry
+    that fact forward when every path assigns it; loops never do because they
+    may execute zero times.  Partial assignments cannot make an initializer
+    redundant.
+    """
+    return {name for name in candidates if not _variable_read_before_write(nodes, name)[1]}
+
+
+def _variable_read_before_write(nodes, name, assigned=False):
+    unsafe = False
+
+    def reads(tokens):
+        return any(token.text.isidentifier() and token.lower == name for token in tokens)
+
+    for node in nodes:
+        data = node.data
+        if node.kind == 'assignment':
+            target = data['target']
+            whole_write = (data['op'] == ':=' and len(target) == 1 and
+                           target[0].text.isidentifier() and target[0].lower == name)
+            if (reads(data['value']) or reads(target[1:])) and not assigned:
+                unsafe = True
+            if target and target[0].lower == name and not whole_write and not assigned:
+                unsafe = True
+            if whole_write:
+                assigned = True
+        elif node.kind == 'if':
+            branch_states = []
+            for condition, body in data['branches']:
+                if reads(condition) and not assigned:
+                    unsafe = True
+                state, bad = _variable_read_before_write(body, name, assigned)
+                branch_states.append(state); unsafe |= bad
+            if data['else']:
+                state, bad = _variable_read_before_write(data['else'], name, assigned)
+                branch_states.append(state); unsafe |= bad
+            else:
+                branch_states.append(assigned)
+            assigned = all(branch_states)
+        elif node.kind in ('case', 'select'):
+            if reads(data['expr']) and not assigned:
+                unsafe = True
+            branch_states = []
+            has_default = False
+            for choices, body in data['choices']:
+                has_default |= any(words(choice).lower() == 'others' for choice in choices)
+                state, bad = _variable_read_before_write(body, name, assigned)
+                branch_states.append(state); unsafe |= bad
+            if not has_default:
+                branch_states.append(assigned)
+            assigned = bool(branch_states) and all(branch_states)
+        elif node.kind in ('for', 'generate'):
+            _, bad = _variable_read_before_write(node.children, name, assigned)
+            unsafe |= bad
+        else:
+            child_state, bad = _variable_read_before_write(node.children, name, assigned)
+            assigned = child_state; unsafe |= bad
+    return assigned, unsafe

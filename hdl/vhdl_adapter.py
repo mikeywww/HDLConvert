@@ -9,7 +9,7 @@ from vhdl2sv.generator import Generator
 from vhdl2sv.symbols import Symbols, TypeInfo
 from vhdl2sv.ast import Node
 from vhdl2sv.lexer import ParseError, words, split as v_split
-from vhdl2sv.drivers import combinational_targets
+from vhdl2sv.drivers import combinational_targets, redundant_variable_initializers
 from .ir import Design, Module, Declaration, Statement, Type, Expr
 from .parser import Parser
 from .lex import expression, tokenize
@@ -38,7 +38,7 @@ class VHDLAdapter:
         if direction is None:raise ParseError('unsupported direction')
         kind={'generic':'parameter','constant':'localparam','variable':'variable'}.get(n.kind,n.kind)
         value=n.data.get('value')
-        if n.data.get('omit_combinational_initializer'):value=None
+        if n.data.get('omit_redundant_initializer'):value=None
         return Declaration(n.name,typ,kind,direction,self.expr(value) if value else None,
                            line=n.line,source=n.source)
     def convert(self,design):
@@ -59,7 +59,7 @@ class VHDLAdapter:
             removable=combinational_targets(a.children)
             for n in a.data['decl']:
                 n=copy.deepcopy(n)
-                if n.kind=='signal' and n.name.lower() in removable:n.data['omit_combinational_initializer']=True
+                if n.kind=='signal' and n.name.lower() in removable:n.data['omit_redundant_initializer']=True
                 d=self.declaration(n)
                 if d:m.declarations.append(d)
             m.enums=dict(self.enums);m.statements=self.statements(a.children,'concurrent')
@@ -131,7 +131,11 @@ class VHDLAdapter:
         old=self.g.symbols;self.g.symbols=Symbols(old)
         try:
             decl=[]
-            for item in n.data['decl']:
+            initialized={item.name.lower() for item in n.data['decl'] if item.kind=='variable' and item.data.get('value')}
+            removable=redundant_variable_initializers(n.children,initialized)
+            for original in n.data['decl']:
+                item=copy.deepcopy(original)
+                if item.kind=='variable' and item.name.lower() in removable:item.data['omit_redundant_initializer']=True
                 d=self.declaration(item)
                 if d:decl.append(d)
             body=n.children;events=[]

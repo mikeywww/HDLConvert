@@ -16,7 +16,8 @@ def run(directory):
         app = EditorApp(root, DND_FILES)
         with tempfile.TemporaryDirectory(dir=directory, prefix='release-check-') as scratch:
             source = Path(scratch)/'中文 input.sv'
-            source.write_text('module smoke(input clk,d,output logic q); always_ff @(posedge clk) q<=d; endmodule', encoding='utf-8')
+            source.write_bytes(('// 中文 GBK input\nmodule smoke(input clk,d,output logic q); '
+                                'always_ff @(posedge clk) q<=d; endmodule').encode('gbk'))
             payload = root.tk.call('format', '%s', root.tk.call('list', str(source), str(source)))
             app.drop(SimpleNamespace(data=payload))
             if app.source_language.get() != 'SystemVerilog':
@@ -30,6 +31,6 @@ def run(directory):
                 time.sleep(.02)
             if app.busy or 'rising_edge' not in app.output.get():
                 raise RuntimeError('editor worker conversion failed')
-        print('PASS: bundled Tk/tkdnd, Unicode drop, language inference and editor conversion')
+        print('PASS: bundled Tk/tkdnd, Unicode drop, GBK decoding, language inference and editor conversion')
     finally:
         root.destroy()

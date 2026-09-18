@@ -6,6 +6,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from .api import convert_text, detect_language, SUFFIX
+from vhdl2sv.encoding import read_source
 
 LABELS={'Auto':'auto','VHDL':'vhdl','Verilog':'verilog','SystemVerilog':'systemverilog'}
 NAMES={v:k for k,v in LABELS.items()}
@@ -129,7 +130,7 @@ class EditorApp:
         try:
             path=Path(path)
             if path.suffix.lower() not in ('.vhd','.vhdl','.v','.sv'):raise ValueError('Unsupported file extension')
-            source=path.read_text(encoding='utf-8-sig');lang=detect_language(source,path)
+            source=read_source(path);lang=detect_language(source,path)
             self.path=path;self.source.set(source);self.source_language.set(NAMES[lang]);self.output.set('');self.output_language=None
             self.status.set(str(path));self.append_log('INFO: Opened '+str(path))
             if LABELS[self.target_language.get()]==lang:self.target_language.set('VHDL' if lang!='vhdl' else 'SystemVerilog')

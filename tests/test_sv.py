@@ -43,7 +43,7 @@ class SystemVerilogTests(unittest.TestCase):
             clk=1;#1;if(stored!==0)$fatal;
             clk=0;d=0;#1;clk=1;#1;if(stored!==1)$fatal;
             $display("PASS");$finish;
-          end endmodule''', expected_warning_count=2)
+          end endmodule''', expected_warning_count=0)
 
     def test_resize_numeric_std(self):
         source = unit(body='''u <= resize(unsigned(d), 4);

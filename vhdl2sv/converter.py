@@ -6,6 +6,7 @@ import tempfile
 from .parser import Parser
 from .generator import Generator
 from .lexer import ParseError, tokenize
+from .encoding import read_source
 
 
 @dataclass
@@ -37,14 +38,14 @@ def convert_file(input_path, output_path=None, *, dependencies=(), strict=False,
     for path in dependencies:
         dep = Path(path).resolve()
         if dep != source:
-            parsed = Parser(dep.read_text(encoding='utf-8-sig')).parse()
+            parsed = Parser(read_source(dep)).parse()
             if any(u.kind not in ('package', 'package_body', 'unsupported') for u in parsed.units):
                 raise ValueError('--dependency accepts package files only')
             old_top, old_arch = generator.top, generator.architecture
             generator.top, generator.architecture = None, None
             generator.generate(parsed)
             generator.top, generator.architecture = old_top, old_arch
-    text = generator.generate(Parser(source.read_text(encoding='utf-8-sig')).parse())
+    text = generator.generate(Parser(read_source(source)).parse())
     result = ConversionResult(text, generator.diagnostics, output)
     if strict and result.diagnostics:
         raise ParseError(f'{len(result.diagnostics)} warning(s); strict mode did not write output')

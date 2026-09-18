@@ -8,8 +8,8 @@ def save(stage, completed, files, tests, issues, next_step):
     old = path.read_text(encoding='utf-8')
     history = old.split('## 阶段历史\n', 1)[-1].strip()
     return checkpoint('HDL Upgrade ' + stage, completed, files, tests, issues,
-        next_step + '\nFixed workspace D:/WORK/PRJ/VHDL2SV. Original requirements: build/HDL_UPGRADE_REQUEST.txt. GitHub publication remains pending; no forced push/reset. Existing tatus is user-owned.',
-        history + '\n- ' + stage + ': ' + tests, mail='Pending stage email; persisted before send.')
+        next_step + '\nFixed workspace D:/WORK/PRJ/VHDL2SV. Original requirements: build/HDL_UPGRADE_REQUEST.txt. Never publish or upload after packaging without explicit user permission. Existing tatus is user-owned.',
+        history + '\n- ' + stage + ': ' + tests, mail='No email for intermediate checkpoint; notify only on important feature completion or observed usage exhaustion.')
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser()

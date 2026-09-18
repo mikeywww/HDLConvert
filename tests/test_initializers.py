@@ -13,9 +13,8 @@ class InitializerTests(unittest.TestCase):
         self.assertNotIn("logic ready_i =", result.text)
         self.assertIn("logic storage = 1'b0;", result.text)
         self.assertIn('assign ready_i =', result.text)
-        self.assertEqual(len(result.diagnostics), 1)
-        self.assertIn('time-zero', result.diagnostics[0].message)
-        self.assertIn('// Original VHDL:', result.text)
+        self.assertEqual(result.diagnostics, [])
+        self.assertNotIn('initializer omitted', result.text)
 
     def test_comb_all_paths(self):
         for body in ("s<=d;", "if rst='1' then s<='0'; else s<=d; end if;",
@@ -33,13 +32,30 @@ class InitializerTests(unittest.TestCase):
         self.assertIn('a[i] = b[i];', result.text)
         self.assertNotIn('t a =', result.text)
 
-    def test_preserve_register_variable_and_constant(self):
+    def test_preserve_register_and_constant_remove_redundant_variable(self):
         result = convert_text(unit("signal s:std_logic:='1'; constant C:integer:=3;",
             "process(clk) variable v:std_logic:='0';begin if rising_edge(clk) then v:=d;s<=v;end if;end process;q<=s;"))
         self.assertEqual(result.diagnostics, [])
         self.assertIn("logic s = 1'b1;", result.text)
-        self.assertIn("static logic v = 1'b0;", result.text)
+        self.assertIn("static logic v;", result.text)
+        self.assertNotIn('initializer omitted', result.text)
         self.assertIn('localparam int C = 3;', result.text)
+
+    def test_preserve_variable_initializer_when_read_before_whole_write(self):
+        for body in ("q<=v;v:=d;", "if d='1' then v:=d;end if;q<=v;",
+                     "v(0):=d;q<=v(0);"):
+            with self.subTest(body=body):
+                declaration = "variable v:std_logic:='1';" if 'v(0)' not in body else \
+                              "variable v:std_logic_vector(1 downto 0):=(others=>'1');"
+                result = convert_text(unit(body=f"process(all) {declaration}begin {body}end process;"))
+                self.assertIn('static logic', result.text)
+                self.assertIn(' = ', result.text)
+
+    def test_remove_variable_initializer_after_complete_branch_assignment(self):
+        result = convert_text(unit(body="""process(all) variable v:std_logic:='1'; begin
+            if d='1' then v:='0'; else v:='1'; end if; q<=v; end process;"""))
+        self.assertIn('static logic v;', result.text)
+        self.assertNotIn('static logic v =', result.text)
 
     def test_preserve_incomplete_partial_conditional_generate(self):
         for body in ("process(all) begin if rst='1' then s<=d;end if;end process;",
@@ -57,7 +73,7 @@ class InitializerTests(unittest.TestCase):
         self.assertIn("logic Ready_I = 1'b1;", result.text)
         result = convert_text(unit("signal s:std_logic:='1';", "process(all) variable s:std_logic:='0';begin s:=d;q<=s;end process;"))
         self.assertIn("logic s = 1'b1;", result.text)
-        self.assertIn("logic s = 1'b0;", result.text)
+        self.assertIn("static logic s;", result.text)
 
     def test_feedback_initial_state_not_erased(self):
         for body in ("s<=s when rst='1' else d;",
@@ -65,12 +81,10 @@ class InitializerTests(unittest.TestCase):
             result = convert_text(unit("signal s:std_logic:='1';", body))
             self.assertIn("logic s = 1'b1;", result.text)
 
-    def test_strict_does_not_silently_change_initial_semantics(self):
+    def test_strict_accepts_proven_redundant_initializer_removal(self):
         with tempfile.TemporaryDirectory(dir='.') as directory:
             source = Path(directory)/'init.vhd'
             source.write_text(unit("signal s:std_logic:='0';", 's<=d;'))
             output = source.with_suffix('.sv')
-            output.write_text('keep')
-            with self.assertRaises(ValueError):
-                convert_file(source, strict=True)
-            self.assertEqual(output.read_text(), 'keep')
+            convert_file(source, strict=True)
+            self.assertIn('logic s;', output.read_text())

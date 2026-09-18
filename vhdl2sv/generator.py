@@ -5,7 +5,7 @@ from .ast import Diagnostic, Node
 from .expressions import Expressions
 from .lexer import ParseError, split, words
 from .symbols import Symbols, TypeInfo, identifier
-from .drivers import combinational_targets
+from .drivers import combinational_targets, redundant_variable_initializers
 
 
 def range_key(ranges):
@@ -78,9 +78,7 @@ class Generator:
                 raise ParseError(f'unsupported port mode {direction}')
             prefix = {'in': 'input ', 'out': 'output ', 'inout': 'inout wire '}[direction]
         value = d.get('value', [])
-        notes = []
-        if n.kind == 'signal' and value and d.get('omit_combinational_initializer'):
-            notes = self.warn(n, f'initializer of combinational signal {n.name} omitted to avoid an initialization/logic driver conflict; time-zero behavior may differ')
+        if value and d.get('omit_redundant_initializer'):
             value = []
         if n.kind == 'generic' and not value:
             raise ParseError(f'generic {n.name} needs default or --generic override')
@@ -98,7 +96,7 @@ class Generator:
                     raise ParseError('array initializer requires aggregate expansion')
             else:
                 init = ' = ' + self.expr(value)
-        return notes + [f'{prefix}{typ.sv} {name}{init};']
+        return [f'{prefix}{typ.sv} {name}{init};']
 
     def declarations(self, nodes):
         result = []
@@ -308,9 +306,14 @@ class Generator:
         self.symbols = Symbols(parent)
         try:
             process_declarations = copy.deepcopy(n.data['decl'])
+            initialized_variables = {d.name.lower() for d in process_declarations
+                                     if d.kind == 'variable' and d.data.get('value')}
+            removable_variables = redundant_variable_initializers(n.children, initialized_variables)
             for declaration in process_declarations:
                 if declaration.kind == 'variable':
                     declaration.data['static_lifetime'] = True
+                    if declaration.name.lower() in removable_variables:
+                        declaration.data['omit_redundant_initializer'] = True
             decl = self.declarations(process_declarations)
             body, clock, reset = n.children, None, None
             if len(body) == 1 and body[0].kind == 'if':
@@ -479,7 +482,7 @@ class Generator:
             declarations = copy.deepcopy(a.data['decl'])
             for declaration in declarations:
                 if declaration.kind == 'signal' and declaration.name.lower() in targets:
-                    declaration.data['omit_combinational_initializer'] = True
+                    declaration.data['omit_redundant_initializer'] = True
             lines += self.indent(self.declarations(declarations))
             lines += self.indent(self.statements(a.children, 'concurrent')) + ['endmodule', '']
         for u in units:

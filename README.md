@@ -19,7 +19,7 @@ VHDL ↔ Verilog ↔ SystemVerilog
 .\HDLConverter.exe --gui
 ```
 
-Windows x64 发布版目标小于 20 MB。程序为单文件，启动时会把 Python/Tcl/Tk/tkdnd 运行库解压到用户临时目录，退出后清理。当前 EXE 未进行 Authenticode 签名。
+Windows x64 发布版目标小于 20 MB。双击 EXE 只显示软件窗口，不保留终端窗口；从现有终端调用时仍保留 CLI 输出。程序为单文件，启动时会把 Python/Tcl/Tk/tkdnd 运行库解压到用户临时目录，退出后清理。当前 EXE 未进行 Authenticode 签名。
 
 ## 从源码运行
 
@@ -54,6 +54,8 @@ python vhdl2sv.py a.v b.sv --target vhdl --output-dir converted
 
 `--source auto` 默认按扩展名识别，也可显式选择 `vhdl`、`verilog` 或 `systemverilog`。输出后缀由 `--target` 决定：`.vhd`、`.v` 或 `.sv`。已有目标文件仅在完整转换成功后原子替换；错误或 `--strict` 警告不会破坏旧文件。
 
+输入文件支持 UTF-8（含 BOM）、GB2312 和 GBK；输出统一保存为 UTF-8。
+
 VHDL→SystemVerilog 的成熟路径仍支持：
 
 ```powershell
@@ -83,11 +85,11 @@ VHDL→SystemVerilog 还支持固定一/二维数组、非零/降序数组范围
 
 VHDL 信号声明初值按三类处理：
 
-- `SAFE_REMOVE`：能证明整个组合信号被完整、非反馈地驱动，为避免初始化和逻辑驱动冲突而省略初值。
+- `SAFE_REMOVE`：能证明整个组合信号被完整、非反馈地驱动，为避免初始化和逻辑驱动冲突而静默省略初值。
 - `PRESERVE`：代码读取或反馈依赖该值，保留上电初值。
 - `UNCERTAIN`：不能证明安全删除，优先保留并输出 warning。
 
-reset 分支是 RTL 功能逻辑，绝不会作为声明初值被删除。静态可计算的位宽不匹配会报告，例如 4 bit 信号赋 12 bit `x"000"`，并拒绝生成猜测性的初始化。该分析不是完整的多驱动、锁存或形式等价证明。
+process 变量只有在每条可能读取路径上都先经过完整赋值时才静默省略声明初值；先读后写、分支漏赋值及部分赋值继续保留。reset 分支是 RTL 功能逻辑，绝不会作为声明初值被删除。静态可计算的位宽不匹配会报告，例如 4 bit 信号赋 12 bit `x"000"`，并拒绝生成猜测性的初始化。该分析不是完整的多驱动、锁存或形式等价证明。
 
 ## 不支持和保守拒绝
 

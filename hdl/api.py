@@ -13,6 +13,7 @@ from vhdl2sv.converter import ConversionResult
 from vhdl2sv.lexer import ParseError, tokenize as vhdl_tokens
 from vhdl2sv.parser import Parser as VHDLParser
 from vhdl2sv.generator import Generator as LegacyGenerator
+from vhdl2sv.encoding import read_source
 from .parser import Parser
 from .verilog import VerilogGenerator, walk, targets, root_name
 from .vhdl import VHDLGenerator
@@ -96,7 +97,7 @@ def convert_text(source, *, source_language=None, target_language='systemverilog
 
 def convert_file(input_path,output_path=None,*,source_language=None,target_language='systemverilog',strict=False,**options):
     src=Path(input_path).resolve();dst=language(target_language)
-    source=src.read_text(encoding='utf-8-sig')
+    source=read_source(src)
     src_lang=source_language or detect_language(source,src)
     out=Path(output_path).resolve() if output_path else src.with_suffix(SUFFIX[dst])
     if out==src:raise ValueError('output cannot overwrite source')
