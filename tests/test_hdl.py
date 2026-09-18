@@ -49,6 +49,18 @@ end if; end process; end;'''
 RTL_V = "module demo(input clk,input rst,input d,output reg q); always @(posedge clk or posedge rst) if(rst) q <= 1'b0; else q <= d; endmodule"
 
 class SixDirections(unittest.TestCase):
+    def test_ddr3_vhdl_to_verilog2001(self):
+        from pathlib import Path
+        from hdl.api import convert_text
+        source=Path('tests/vhdl/ddr3_controller_500.vhd').read_text(encoding='utf-8')
+        result=convert_text(source,source_language='vhdl',target_language='verilog')
+        self.assertNotIn('No complete target design emitted',result.text)
+        self.assertIn('module ddr3_controller_500',result.text)
+        self.assertIn('reg [14:0] rows [0:7];',result.text)
+        self.assertIn('function  byte_parity;',result.text)
+        self.assertIn('request_q[143:16]',result.text)
+        self.assertNotRegex(result.text,r'\b(?:logic|always_ff|always_comb|typedef)\b')
+
     def test_all_six_clock_reset(self):
         from hdl.api import convert_text
         codes={'vhdl':RTL_VHDL,'verilog':RTL_V,'systemverilog':RTL_V.replace('reg','logic').replace('always @','always_ff @')}

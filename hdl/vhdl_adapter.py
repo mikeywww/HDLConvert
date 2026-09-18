@@ -17,8 +17,23 @@ from .lex import expression, tokenize
 
 class VHDLAdapter:
     def __init__(self,top=None,architecture=None,generics=None):
-        self.g=Generator(top,architecture,generics);self.enums={}
+        self.g=Generator(top,architecture,generics);self.enums={};self.types={};self.functions=[];self.nt_symbols={}
     def expr(self,tokens):return expression(tokenize(self.g.expr(tokens)))
+    def neutral_type(self,ref):
+        name=ref.name.lower()
+        if name in self.types:
+            return copy.deepcopy(self.types[name])
+        info=self.g.symbols.type_of(ref,self.g.expr)
+        parser=Parser('');parser.enums=self.enums
+        neutral_type=re.sub(r'\bbit\b','logic',info.sv)
+        return parser.declarations(tokenize(neutral_type+' neutral_type'))[0].type
+    @staticmethod
+    def type_width(typ):
+        if typ.kind=='integer':return 32
+        if not typ.bounds:return 1
+        left,right=typ.bounds
+        if left.kind!='literal' or right.kind!='literal':raise ParseError('record field width must be statically known')
+        return abs(int(left.value)-int(right.value))+1
     def declaration(self,n):
         if n.kind=='component':return None
         if n.kind=='enum':
@@ -27,20 +42,52 @@ class VHDLAdapter:
             typ=Type(bounds=(Expr('literal',str(bits-1)),Expr('literal','0')))
             self.enums[n.name]=(typ,[(name,Expr('literal',str(i))) for i,name in enumerate(n.data['values'])])
             return None
-        if n.kind in ('record','array','subtype','function','prototype','unsupported'):
-            raise ParseError(f'line {n.line}: {n.kind} lowering to neutral IR not supported; VHDL-to-SV legacy path remains available')
+        if n.kind=='subtype':
+            self.g.declaration(n);self.types[n.name.lower()]=self.neutral_type(n.data['type']);return None
+        if n.kind=='array':
+            self.g.declaration(n);typ=self.neutral_type(n.data['type'])
+            typ.dimensions=[(self.expr(r.left),self.expr(r.right)) for r in n.data['ranges']]
+            self.types[n.name.lower()]=typ;return None
+        if n.kind=='record':
+            self.g.declaration(n);fields=[];total=0
+            for field in n.children:
+                typ=self.neutral_type(field.data['type']);width=self.type_width(typ)
+                fields.append((field.name.lower(),typ,width));total+=width
+            offset=total;mapping={}
+            for name,typ,width in fields:
+                offset-=width;mapping[name]=(typ,offset+width-1,offset)
+            self.types[n.name.lower()]=Type(bounds=(Expr('literal',str(total-1)),Expr('literal','0')),fields=mapping)
+            return None
+        if n.kind=='function':
+            self.g.declaration(n)
+            old=self.g.symbols;self.g.symbols=Symbols(old)
+            try:
+                args=[];locals_=[]
+                for arg in n.data['args']:
+                    self.g.declaration(arg);typ=self.neutral_type(arg.data['type'])
+                    self.nt_symbols[arg.name.lower()]=typ;args.append(Declaration(arg.name.lower(),typ,'port','input'))
+                for item in n.data['decl']:
+                    d=self.declaration(item)
+                    if d:locals_.append(d)
+                body=self.statements(n.children,'function')
+                self.functions.append(dict(name=n.name.lower(),type=self.neutral_type(n.data['type']),args=args,locals=locals_,body=body))
+            finally:self.g.symbols=old
+            return None
+        if n.kind in ('prototype','unsupported'):
+            raise ParseError(f'line {n.line}: {n.kind} lowering to neutral IR not supported')
         self.g.declaration(n) # registers original language symbol/type metadata
-        info=self.g.symbols.find(n.name).type
-        if info.ranges:raise ParseError('unpacked array neutral lowering unsupported')
-        parser=Parser('');parser.enums=self.enums
-        typ=parser.declarations(tokenize(info.sv+' neutral_type'))[0].type
+        typ=self.neutral_type(n.data['type'])
         direction={'in':'input','out':'output','inout':'inout','':''}.get(n.data.get('direction',''))
         if direction is None:raise ParseError('unsupported direction')
         kind={'generic':'parameter','constant':'localparam','variable':'variable'}.get(n.kind,n.kind)
         value=n.data.get('value')
         if n.data.get('omit_redundant_initializer'):value=None
-        return Declaration(n.name,typ,kind,direction,self.expr(value) if value else None,
-                           line=n.line,source=n.source)
+        # Verilog-2001 memory declarations cannot carry aggregate initializers;
+        # reset/process assignments are lowered to explicit element loops.
+        converted=None if typ.dimensions and value else self.expr(value) if value else None
+        decl=Declaration(n.name,typ,kind,direction,converted,line=n.line,source=n.source)
+        self.nt_symbols[n.name.lower()]=typ
+        return decl
     def convert(self,design):
         neutral=Design(source_language='vhdl')
         entities=[u for u in design.units if u.kind=='entity' and (not self.g.top or u.name.lower()==self.g.top.lower())]
@@ -48,7 +95,7 @@ class VHDLAdapter:
         for entity in entities:
             arches=[u for u in design.units if u.kind=='architecture' and u.data['entity'].lower()==entity.name.lower() and (not self.g.architecture or u.name.lower()==self.g.architecture.lower())]
             if len(arches)!=1:raise ParseError('select one architecture')
-            a=arches[0];self.g.symbols=Symbols();self.enums={}
+            a=arches[0];self.g.symbols=Symbols();self.enums={};self.types={};self.functions=[];self.nt_symbols={}
             if entity.data['imports'] or a.data['imports']:raise ParseError('package metadata requires legacy VHDL-to-SV path')
             m=Module(entity.name.lower(),source=entity.source+'\n'+a.source,line=entity.line)
             for n in entity.children:
@@ -62,7 +109,7 @@ class VHDLAdapter:
                 if n.kind=='signal' and n.name.lower() in removable:n.data['omit_redundant_initializer']=True
                 d=self.declaration(n)
                 if d:m.declarations.append(d)
-            m.enums=dict(self.enums);m.statements=self.statements(a.children,'concurrent')
+            m.enums=dict(self.enums);m.functions=list(self.functions);m.statements=self.statements(a.children,'concurrent')
             neutral.modules.append(m)
         if not neutral.modules:raise ParseError('no selected entity')
         return neutral
@@ -72,6 +119,13 @@ class VHDLAdapter:
             d=n.data;k=n.kind
             if k=='null':continue
             if k=='assignment':
+                target_name=d['target'][0].text.lower() if len(d['target'])==1 else ''
+                typ=self.nt_symbols.get(target_name)
+                if typ and typ.dimensions and 'others' in words(d['value']).lower():
+                    body=[Statement('assignment',dict(target=Expr('index',args=[Expr('name',target_name),Expr('name','i')]),value=Expr('literal',"'0"),op='<=' if context=='clocked' else '=',concurrent=False))]
+                    left,right=typ.dimensions[0];ascending=int(left.value)<=int(right.value)
+                    s=Statement('for',dict(name='i',start=left,condition=Expr('binary','<=' if ascending else '>=',[Expr('name','i'),right]),update=Expr('binary','+' if ascending else '-',[Expr('name','i'),Expr('literal','1')]),declared=True,generate=False),body)
+                    s.line=n.line;s.source=n.source;s.label=n.name;out.append(s);continue
                 s=Statement('assignment',dict(target=self.expr(d['target']),value=self.expr(d['value']),
                     op='<=' if context=='clocked' and d['op']=='<=' else '=',concurrent=context=='concurrent'))
             elif k=='if':
@@ -87,6 +141,7 @@ class VHDLAdapter:
                 s=Statement('case',dict(expression=self.expr(d['expr']),choices=choices))
                 if k=='select':s=Statement('process',dict(events=[],sensitivity=[],flavor='always_comb'),[s])
             elif k=='process':s=self.process(n)
+            elif k=='return':s=Statement('return',dict(value=self.expr(d['value'])))
             elif k in ('for','generate'):
                 gen=k=='generate'
                 if 'variable' in d:

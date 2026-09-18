@@ -27,6 +27,8 @@ class Type:
     bounds: tuple | None = None
     dimensions: list = field(default_factory=list)
     enum: str = ''
+    element: object = None
+    fields: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -60,6 +62,7 @@ class Module:
     declarations: list = field(default_factory=list)
     statements: list = field(default_factory=list)
     enums: dict = field(default_factory=dict)
+    functions: list = field(default_factory=list)
     source: str = ''
     line: int = 1
 
