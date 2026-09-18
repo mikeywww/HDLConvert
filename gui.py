@@ -192,7 +192,8 @@ def run():
         root, dnd = tk.Tk(), None
     else:
         root, dnd = TkinterDnD.Tk(), DND_FILES
-    ConverterApp(root, dnd)
+    from hdl.editor import EditorApp
+    EditorApp(root, dnd)
     root.mainloop()
 
 

@@ -9,7 +9,7 @@ from vhdl2sv.converter import convert_file
 def main(argv=None):
     if argv is None and getattr(sys, 'frozen', False) and len(sys.argv) == 1:
         argv = ['--gui']
-    parser = argparse.ArgumentParser(description='Lightweight VHDL to SystemVerilog converter')
+    parser = argparse.ArgumentParser(description='Lightweight HDL Converter: VHDL / Verilog / SystemVerilog')
     parser.add_argument('--version', action='version', version='VHDL2SV 1.0.0')
     parser.add_argument('--licenses', action='store_true', help='show bundled third-party notices')
     parser.add_argument('--self-test', type=Path, metavar='DIRECTORY', help='test bundled GUI/DnD and conversion in a temporary subdirectory')
@@ -17,6 +17,8 @@ def main(argv=None):
     parser.add_argument('-o', '--output', type=Path, help='single output .sv file')
     parser.add_argument('--output-dir', type=Path)
     parser.add_argument('--gui', action='store_true')
+    parser.add_argument('--source', choices=('auto','vhdl','verilog','systemverilog','sv'), default='auto')
+    parser.add_argument('--target', choices=('vhdl','verilog','systemverilog','sv'), default='systemverilog')
     parser.add_argument('--top')
     parser.add_argument('--architecture', '--arch')
     parser.add_argument('-g', '--generic', action='append', default=[], metavar='NAME=VALUE')
@@ -47,15 +49,23 @@ def main(argv=None):
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     success = warned = failures = 0
     destinations = set()
+    from hdl.api import convert_file as convert_hdl, language, SUFFIX
+    target = language(args.target)
+    suffix = SUFFIX[target]
     for source in dict.fromkeys(p.resolve() for p in args.inputs):
-        output = args.output or ((args.output_dir / source.with_suffix('.sv').name) if args.output_dir else source.with_suffix('.sv'))
+        output = args.output or ((args.output_dir / source.with_suffix(suffix).name) if args.output_dir else source.with_suffix(suffix))
         key = str(output.resolve()).casefold()
         try:
             if key in destinations:
                 raise ValueError(f'output path collision: {output}')
             destinations.add(key)
-            result = convert_file(source, output, top=args.top, architecture=args.architecture,
-                                  generics=generics, dependencies=args.dependency, strict=args.strict)
+            legacy = bool(args.dependency) and target == 'systemverilog' and source.suffix.lower() in ('.vhd','.vhdl')
+            if args.dependency and not legacy:
+                raise ValueError('--dependency currently supports only VHDL to SystemVerilog')
+            if legacy:
+                result = convert_file(source, output, top=args.top, architecture=args.architecture, generics=generics, dependencies=args.dependency, strict=args.strict)
+            else:
+                result = convert_hdl(source, output, source_language=None if args.source=='auto' else args.source, target_language=target, top=args.top, architecture=args.architecture, generics=generics, strict=args.strict)
             for diagnostic in result.diagnostics:
                 logging.warning('%s: line %s: %s', source.name, diagnostic.line, diagnostic.message)
             warned += bool(result.diagnostics)

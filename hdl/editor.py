@@ -1,0 +1,191 @@
+"""Small native Tk editor shell. No conversion logic lives in this module."""
+from pathlib import Path
+import queue
+import re
+import threading
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+from .api import convert_text, detect_language, SUFFIX
+
+LABELS={'Auto':'auto','VHDL':'vhdl','Verilog':'verilog','SystemVerilog':'systemverilog'}
+NAMES={v:k for k,v in LABELS.items()}
+KEYWORDS=re.compile(r'\b(?:entity|architecture|is|begin|end|signal|variable|constant|generic|port|in|out|inout|process|if|then|elsif|else|case|when|others|for|loop|generate|type|array|of|std_logic|std_logic_vector|unsigned|signed|integer|module|endmodule|input|output|wire|reg|logic|assign|always|always_ff|always_comb|posedge|negedge|parameter|localparam|typedef|enum|endcase|endgenerate)\b',re.I)
+
+
+class CodeEditor(ttk.Frame):
+    def __init__(self,parent,on_change=None):
+        super().__init__(parent)
+        self.on_change=on_change;self.pending=None
+        self.gutter=tk.Canvas(self,width=48,background='#f4f4f4',highlightthickness=0)
+        self.gutter.grid(row=0,column=0,sticky='ns')
+        self.text=tk.Text(self,wrap='none',undo=True,autoseparators=True,maxundo=100,
+            background='white',foreground='#202020',insertbackground='#202020',
+            selectbackground='#0078d7',selectforeground='white',font=('Consolas',11),
+            relief='flat',borderwidth=0,padx=6,pady=5,tabs=('4c',))
+        self.text.grid(row=0,column=1,sticky='nsew')
+        y=ttk.Scrollbar(self,orient='vertical',command=self.text.yview);y.grid(row=0,column=2,sticky='ns')
+        x=ttk.Scrollbar(self,orient='horizontal',command=self.text.xview);x.grid(row=1,column=1,sticky='ew')
+        def scrolled(first,last): y.set(first,last);self.after_idle(self.redraw)
+        self.text.configure(yscrollcommand=scrolled,xscrollcommand=x.set)
+        self.rowconfigure(0,weight=1);self.columnconfigure(1,weight=1)
+        self.text.tag_configure('keyword',foreground='#0000a0')
+        self.text.tag_configure('number',foreground='#7d3400')
+        self.text.tag_configure('comment',foreground='#287828')
+        self.text.bind('<<Modified>>',self.changed)
+        self.text.bind('<Configure>',lambda _:self.redraw())
+        self.text.bind('<Control-a>',self.select_all)
+        self.text.bind('<Control-A>',self.select_all)
+        self.text.bind('<Control-y>',lambda _:self.redo())
+        self.text.bind('<Control-Shift-Z>',lambda _:self.redo())
+        self.text.bind('<KeyRelease>',lambda _:self.status())
+        self.text.bind('<ButtonRelease-1>',lambda _:self.status())
+    def select_all(self,_=None):
+        self.text.tag_add('sel','1.0','end-1c');self.text.mark_set('insert','1.0');return 'break'
+    def redo(self):
+        try:self.text.edit_redo()
+        except tk.TclError:pass
+        return 'break'
+    def changed(self,_=None):
+        if not self.text.edit_modified():return
+        self.text.edit_modified(False)
+        if self.pending:self.after_cancel(self.pending)
+        self.pending=self.after(180,self.highlight)
+        self.redraw();self.status()
+    def status(self):
+        if self.on_change:self.on_change(self.text.index('insert'))
+    def set(self,value):
+        self.text.delete('1.0','end');self.text.insert('1.0',value)
+        self.text.edit_reset();self.highlight();self.redraw()
+    def get(self):return self.text.get('1.0','end-1c')
+    def redraw(self):
+        self.gutter.delete('all');index=self.text.index('@0,0')
+        while True:
+            location=self.text.dlineinfo(index)
+            if location is None:break
+            self.gutter.create_text(40,location[1],anchor='ne',text=index.split('.')[0],font=('Consolas',10),fill='#747474')
+            index=self.text.index(index+'+1line')
+    def highlight(self):
+        self.pending=None;source=self.get()
+        for tag in ('keyword','number','comment'):self.text.tag_remove(tag,'1.0','end')
+        # Highlight is optional visual assistance, never parsing. Bound work to
+        # keep editing responsive for unusually large pasted files.
+        if len(source)>300000:return
+        for tag,pattern in [('keyword',KEYWORDS),('number',re.compile(r"\b\d[\w']*")),('comment',re.compile(r'--[^\n]*|//[^\n]*|/\*[\s\S]*?\*/'))]:
+            for m in pattern.finditer(source):self.text.tag_add(tag,f'1.0+{m.start()}c',f'1.0+{m.end()}c')
+        self.text.tag_raise('comment');self.text.tag_raise('sel')
+
+
+class EditorApp:
+    def __init__(self,root,dnd_type=None):
+        self.root=root;self.busy=False;self.events=queue.Queue();self.path=None;self.output_language=None
+        root.title('HDL Converter');root.geometry('1120x740');root.minsize(780,520)
+        style=ttk.Style(root)
+        if 'vista' in style.theme_names():style.theme_use('vista')
+        style.configure('.',font=('Segoe UI',10))
+        style.configure('TFrame',background='#f0f0f0');style.configure('TLabel',background='#f0f0f0')
+        style.configure('TButton',padding=(12,5));style.configure('TLabelframe',background='#f0f0f0')
+        root.configure(background='#f0f0f0')
+        shell=ttk.Frame(root,padding=10);shell.pack(fill='both',expand=True)
+        bar=ttk.Frame(shell);bar.pack(fill='x',pady=(0,8))
+        ttk.Label(bar,text='Source:').pack(side='left',padx=(0,6))
+        self.source_language=tk.StringVar(value='Auto');self.target_language=tk.StringVar(value='SystemVerilog')
+        self.source_combo=ttk.Combobox(bar,textvariable=self.source_language,values=list(LABELS),state='readonly',width=15)
+        self.source_combo.pack(side='left')
+        ttk.Label(bar,text='  →  Target:').pack(side='left',padx=6)
+        self.target_combo=ttk.Combobox(bar,textvariable=self.target_language,values=list(LABELS)[1:],state='readonly',width=15)
+        self.target_combo.pack(side='left')
+        ttk.Label(bar,text='Drop .vhd / .vhdl / .v / .sv',foreground='#555555').pack(side='right')
+        panes=ttk.Panedwindow(shell,orient='vertical');panes.pack(fill='both',expand=True)
+        editors=ttk.Panedwindow(panes,orient='horizontal');panes.add(editors,weight=5)
+        left=ttk.Labelframe(editors,text='Source Code',padding=1);right=ttk.Labelframe(editors,text='Converted Code',padding=1)
+        editors.add(left,weight=1);editors.add(right,weight=1)
+        self.status=tk.StringVar(value='Ready')
+        self.source=CodeEditor(left,lambda pos:self.status.set('Source  Ln '+pos.replace('.',', Col ')))
+        self.source.pack(fill='both',expand=True)
+        self.output=CodeEditor(right,lambda pos:self.status.set('Converted  Ln '+pos.replace('.',', Col ')))
+        self.output.pack(fill='both',expand=True)
+        logs=ttk.Labelframe(panes,text='Warnings / Conversion Log',padding=3);panes.add(logs,weight=1)
+        self.log=tk.Text(logs,height=7,wrap='word',state='disabled',font=('Consolas',10),background='white',relief='flat')
+        self.log.pack(fill='both',expand=True)
+        bottom=ttk.Frame(shell);bottom.pack(fill='x',pady=(8,0));self.controls=[]
+        for label,command in [('Open',self.open_file),('Convert',self.convert),('Save As',self.save_as),('Copy',self.copy),('Clear',self.clear)]:
+            button=ttk.Button(bottom,text=label,command=command);button.pack(side='left',padx=(0,7));self.controls.append(button)
+        ttk.Label(shell,textvariable=self.status,anchor='w',relief='sunken',padding=(5,3)).pack(fill='x',pady=(8,0))
+        if dnd_type:
+            self.source.text.drop_target_register(dnd_type);self.source.text.dnd_bind('<<Drop>>',self.drop)
+        else:self.append_log('WARNING: tkinterdnd2 unavailable; Open and pasted code remain available.')
+        root.bind('<Control-o>',lambda _:self.open_file())
+        root.bind('<Control-s>',lambda _:self.save_as())
+        root.bind('<F5>',lambda _:self.convert())
+        root.protocol('WM_DELETE_WINDOW',self.close);root.after(80,self.poll)
+    def append_log(self,message):
+        self.log.configure(state='normal');self.log.insert('end',message+'\n');self.log.see('end');self.log.configure(state='disabled')
+    def open_file(self):
+        if self.busy:return
+        path=filedialog.askopenfilename(filetypes=[('HDL files','*.vhd *.vhdl *.v *.sv'),('All files','*.*')])
+        if path:self.load(path)
+    def load(self,path):
+        if self.busy:return
+        try:
+            path=Path(path)
+            if path.suffix.lower() not in ('.vhd','.vhdl','.v','.sv'):raise ValueError('Unsupported file extension')
+            source=path.read_text(encoding='utf-8-sig');lang=detect_language(source,path)
+            self.path=path;self.source.set(source);self.source_language.set(NAMES[lang]);self.output.set('');self.output_language=None
+            self.status.set(str(path));self.append_log('INFO: Opened '+str(path))
+            if LABELS[self.target_language.get()]==lang:self.target_language.set('VHDL' if lang!='vhdl' else 'SystemVerilog')
+        except (OSError,ValueError) as exc:self.append_log('ERROR: '+str(exc))
+    def drop(self,event):
+        paths=self.root.tk.splitlist(event.data)
+        accepted=[p for p in paths if Path(p).suffix.lower() in ('.vhd','.vhdl','.v','.sv')]
+        for p in paths:
+            if p not in accepted:self.append_log('WARNING: ignored '+p)
+        if len(accepted)>1:self.append_log('WARNING: Editor opens one file at a time; first HDL file opened. Use CLI for batch conversion.')
+        if accepted:self.load(accepted[0])
+    def convert(self):
+        if self.busy:return
+        source=self.source.get();src=LABELS[self.source_language.get()];dst=LABELS[self.target_language.get()]
+        if not source.strip():self.append_log('WARNING: Source Code is empty.');return
+        try:
+            if src=='auto':src=detect_language(source)
+            if src==dst:raise ValueError('Choose different source and target languages')
+        except ValueError as exc:self.append_log('ERROR: '+str(exc));return
+        self.busy=True;self.status.set('Converting '+NAMES[src]+' → '+NAMES[dst]+'…')
+        for c in self.controls:c.configure(state='disabled')
+        self.source_combo.configure(state='disabled');self.target_combo.configure(state='disabled')
+        def work():
+            try:self.events.put(('result',convert_text(source,source_language=src,target_language=dst),dst))
+            except Exception as exc:self.events.put(('error',str(exc),dst))
+        threading.Thread(target=work,daemon=True).start()
+    def poll(self):
+        try:
+            while True:
+                kind,value,dst=self.events.get_nowait()
+                if kind=='result':
+                    self.output.set(value.text);self.output_language=dst
+                    for diagnostic in value.diagnostics:self.append_log(str(diagnostic))
+                    self.status.set(f'Conversion finished — {len(value.diagnostics)} warning(s)')
+                    self.append_log('INFO: '+self.status.get())
+                else:self.append_log('ERROR: '+value);self.status.set('Conversion failed')
+                self.busy=False
+                for c in self.controls:c.configure(state='normal')
+                self.source_combo.configure(state='readonly');self.target_combo.configure(state='readonly')
+        except queue.Empty:pass
+        self.root.after(80,self.poll)
+    def save_as(self):
+        if self.busy:return
+        if not self.output.get().strip():self.append_log('WARNING: No converted code to save.');return
+        dst=self.output_language or LABELS[self.target_language.get()];suffix=SUFFIX[dst]
+        path=filedialog.asksaveasfilename(defaultextension=suffix,initialfile=(self.path.stem if self.path else 'converted')+suffix,filetypes=[(NAMES[dst],'*'+suffix)])
+        if not path:return
+        if self.path and Path(path).resolve()==self.path.resolve():self.append_log('ERROR: Choose a different output path; source must be preserved.');return
+        try:Path(path).write_text(self.output.get(),encoding='utf-8');self.status.set('Saved '+path)
+        except OSError as exc:self.append_log('ERROR: '+str(exc))
+    def copy(self):
+        self.root.clipboard_clear();self.root.clipboard_append(self.output.get());self.status.set('Converted code copied')
+    def clear(self):
+        if self.busy:return
+        self.source.set('');self.output.set('');self.path=None;self.output_language=None
+        self.log.configure(state='normal');self.log.delete('1.0','end');self.log.configure(state='disabled');self.status.set('Ready')
+    def close(self):
+        if self.busy:self.append_log('INFO: Wait for conversion to finish before closing.')
+        else:self.root.destroy()
