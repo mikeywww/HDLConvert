@@ -1,26 +1,43 @@
 """Run HDL conversions from the command line or start the native editor GUI."""
 import argparse
 import logging
+import os
 import sys
 import ctypes
 from pathlib import Path
 from hdlconvert.converter import convert_file
 
 
-def close_private_gui_console():
-    """Detach a console created solely for this frozen GUI process."""
+def attach_cli_streams():
+    """Recover stdout/stderr for a windowed frozen CLI invocation."""
     if sys.platform != 'win32' or not getattr(sys, 'frozen', False):
         return
-    processes = (ctypes.c_ulong * 4)()
     kernel = ctypes.windll.kernel32
-    count = kernel.GetConsoleProcessList(processes, len(processes))
-    if count == 1:
-        kernel.FreeConsole()
+    def inherited(fd):
+        try:
+            return open(os.dup(fd), 'w', encoding='utf-8', errors='replace',
+                        buffering=1, closefd=True)
+        except OSError:
+            return None
+
+    stdout = inherited(1)
+    stderr = inherited(2)
+    if stdout is None and kernel.AttachConsole(0xffffffff):
+        stdout = open('CONOUT$', 'w', encoding='utf-8', errors='replace', buffering=1)
+        stderr = open('CONOUT$', 'w', encoding='utf-8', errors='replace', buffering=1)
+    if stdout is not None:
+        sys.stdout = stdout
+    if stderr is not None:
+        sys.stderr = stderr
 
 
 def main(argv=None):
-    if argv is None and getattr(sys, 'frozen', False) and len(sys.argv) == 1:
-        argv = ['--gui']
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    if getattr(sys, 'frozen', False) and not raw_args:
+        raw_args = ['--gui']
+    elif getattr(sys, 'frozen', False) and '--gui' not in raw_args:
+        attach_cli_streams()
+    argv = raw_args
     parser = argparse.ArgumentParser(description='HDLConvert: VHDL / Verilog / SystemVerilog')
     parser.add_argument('--version', action='version', version='HDLConvert 2.0.1')
     parser.add_argument('--licenses', action='store_true', help='show bundled third-party notices')
@@ -47,7 +64,6 @@ def main(argv=None):
         run(args.self_test)
         return 0
     if args.gui:
-        close_private_gui_console()
         from gui import run
         run()
         return 0

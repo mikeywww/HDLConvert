@@ -19,7 +19,7 @@ VHDL ↔ Verilog ↔ SystemVerilog
 .\HDLConvert.exe --gui
 ```
 
-Windows x64 发布版目标小于 20 MB。双击 EXE 只显示中文软件窗口，并直接关闭程序自建的终端窗口；从现有终端调用 CLI 时仍保留输出。程序为单文件，启动时会把 Python/Tcl/Tk/tkdnd 运行库解压到用户临时目录，退出后清理。当前 EXE 未进行 Authenticode 签名。
+Windows x64 发布版目标小于 20 MB。EXE 使用 Windows GUI 子系统，双击时不会创建终端窗口；命令行模式会尝试连接已有终端并保留输出。程序为单文件，启动时会把 Python/Tcl/Tk/tkdnd 运行库解压到用户临时目录，退出后清理。当前 EXE 未进行 Authenticode 签名。
 
 ## 从源码运行
 
@@ -33,7 +33,7 @@ python hdlconvert.py --gui
 
 ## GUI
 
-GUI 使用 tkinter/ttk，保持 Windows 10 原生桌面工具风格，界面文字为中文。工作流：
+GUI 使用 tkinter/ttk，保持 Windows 10 原生桌面工具风格，界面文字为中文。程序启用 Windows Per-Monitor DPI 感知并使用微软雅黑 UI 字体，使高 DPI 缩放下的中文显示更清晰；默认窗口尺寸会按屏幕调整，确保底部状态栏可见。工作流：
 
 1. 拖入 `.vhd`、`.vhdl`、`.v` 或 `.sv`，也可点击 Open 或粘贴代码。
 2. 检查自动识别的 Source Language，选择 Target Language。

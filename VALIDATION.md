@@ -1,5 +1,14 @@
 # Validation record
 
+## 2026-09-18 — Stage 16: true windowed EXE and high-DPI GUI
+
+- PyInstaller now uses the Windows `windowed` bootloader (`runw.exe`). GUI launch does not create a console process/window; frozen CLI mode recovers inherited stdout/stderr or attaches to a parent console when possible.
+- Direct no-argument launch inspection found exactly one visible top-level window, titled `HDLConvert`, and no console/taskbar companion window.
+- GUI enables Per-Monitor V2 DPI awareness before Tk initialization, derives Tk scaling from monitor DPI, uses Microsoft YaHei UI for controls, and chooses a larger screen-aware default geometry capped at 1320×900 with a 900×650 minimum.
+- Relevant checks: 7 entry/CLI tests passed; native Tk/tkdnd editor smoke passed; isolated frozen EXE verification passed after one targeted stream-recovery correction.
+- Local `dist/HDLConvert.exe`: 9,765,204 bytes; SHA-256 `75edc91ed2406c2713de7d0b3ec6d0e6fed92a548c4f059420f1ee7874004ad7`.
+- No source push, v2.0.1 Release, or EXE upload was performed for this stage.
+
 ## 2026-09-18 — Stage 15: complete HDLConvert rename
 
 - Renamed the Python package to `hdlconvert`, entry point to `hdlconvert.py`, generated-code branding to `HDLConvert`, Windows product metadata and artifact to `HDLConvert.exe`, and canonical workspace to `D:\WORK\PRJ\HDLConvert`.

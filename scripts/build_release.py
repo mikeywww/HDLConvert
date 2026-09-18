@@ -26,7 +26,7 @@ def main():
                   'compression', '_zstd', 'decimal', '_decimal']
     exclude_args = [part for name in exclusions for part in ('--exclude-module', name)]
     subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean',
-        '--onefile', '--console', '--hide-console', 'hide-early', '--noupx',
+        '--onefile', '--windowed', '--noupx',
         '--optimize', '2', '--name', 'HDLConvert',
         '--distpath', str(ROOT/'dist'), '--workpath', str(ROOT/'build'/'pyinstaller'),
         '--specpath', str(ROOT/'build'),

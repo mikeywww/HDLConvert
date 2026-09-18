@@ -80,10 +80,13 @@ class CodeEditor(ttk.Frame):
 class EditorApp:
     def __init__(self,root,dnd_type=None):
         self.root=root;self.busy=False;self.events=queue.Queue();self.path=None;self.output_language=None
-        root.title('HDLConvert');root.geometry('1120x740');root.minsize(780,520)
+        root.title('HDLConvert')
+        width=min(1320,max(900,root.winfo_screenwidth()-80))
+        height=min(900,max(650,root.winfo_screenheight()-100))
+        root.geometry(f'{width}x{height}');root.minsize(900,650)
         style=ttk.Style(root)
         if 'vista' in style.theme_names():style.theme_use('vista')
-        style.configure('.',font=('Segoe UI',10))
+        style.configure('.',font=('Microsoft YaHei UI',10))
         style.configure('TFrame',background='#f0f0f0');style.configure('TLabel',background='#f0f0f0')
         style.configure('TButton',padding=(12,5));style.configure('TLabelframe',background='#f0f0f0')
         root.configure(background='#f0f0f0')

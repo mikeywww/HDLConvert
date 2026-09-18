@@ -1,11 +1,31 @@
 """Tk UI only: all conversion goes through hdlconvert.converter."""
 from pathlib import Path
+import ctypes
 import queue
+import sys
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog
 from tkinter.scrolledtext import ScrolledText
 from hdlconvert.converter import convert_file
+
+
+def enable_crisp_windows_dpi():
+    """Enable per-monitor DPI before Tk creates any native window."""
+    if sys.platform != 'win32':
+        return
+    try:
+        if ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return
+    except (AttributeError, OSError):
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except (AttributeError, OSError):
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except (AttributeError, OSError):
+            pass
 
 
 class FileQueue:
@@ -53,8 +73,8 @@ class ConverterApp:
     def __init__(self, root, dnd_type=None):
         self.root = root
         root.title('VHDL → SystemVerilog Converter')
-        root.geometry('900x680')
-        root.minsize(650, 500)
+        root.geometry('1200x820')
+        root.minsize(900, 650)
         self.files = FileQueue()
         self.events = queue.Queue()
         self.busy = False
@@ -62,7 +82,7 @@ class ConverterApp:
         self.output_dir = tk.StringVar()
         frame = ttk.Frame(root, padding=16)
         frame.pack(fill='both', expand=True)
-        ttk.Label(frame, text='VHDL → SystemVerilog Converter', font=('Segoe UI', 18)).pack(anchor='w', pady=(0, 12))
+        ttk.Label(frame, text='VHDL → SystemVerilog Converter', font=('Microsoft YaHei UI', 18)).pack(anchor='w', pady=(0, 12))
         self.drop_area = ttk.Label(frame, text='将一个或多个 .vhd / .vhdl 文件拖放到这里', anchor='center', relief='ridge', padding=22)
         self.drop_area.pack(fill='x')
         self.listbox = tk.Listbox(frame, selectmode='extended', height=9)
@@ -186,12 +206,14 @@ class ConverterApp:
 
 
 def run():
+    enable_crisp_windows_dpi()
     try:
         from tkinterdnd2 import DND_FILES, TkinterDnD
     except ImportError:
         root, dnd = tk.Tk(), None
     else:
         root, dnd = TkinterDnD.Tk(), DND_FILES
+    root.tk.call('tk', 'scaling', root.winfo_fpixels('1i') / 72.0)
     from hdl.editor import EditorApp
     EditorApp(root, dnd)
     root.mainloop()
