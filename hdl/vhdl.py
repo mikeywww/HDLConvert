@@ -70,6 +70,7 @@ class VHDLGenerator:
             if v in ('<<','>>','<<<','>>>'): return self.etype(a[0])
             x,y=map(self.etype,a)
             if x.kind==y.kind=='integer': return x
+            if x.kind==y.kind=='boolean' and v in ('&','|','^','~^','^~'): return Type('boolean')
             if not x.bounds and not y.bounds and x.kind==y.kind=='bits': return Type()
             wx,wy=self.bits(x),self.bits(y)
             if wx is None or wy is None:
@@ -82,13 +83,18 @@ class VHDLGenerator:
             return x
         if k in ('concat','repeat'):
             parts=a if k=='concat' else a[1].args
-            widths=[]
+            width=Expr('literal','0')
             for p in parts:
                 t=self.etype(p)
                 if t.kind=='integer': raise ParseError('unsized integer in concatenation')
-                widths.append(abs(literal_int(t.bounds[0])-literal_int(t.bounds[1]))+1 if t.bounds else 1)
-            width=sum(widths)*(literal_int(a[0]) if k=='repeat' else 1)
-            return Type(bounds=(Expr('literal',str(width-1)),Expr('literal','0')))
+                if not t.bounds: term=Expr('literal','1')
+                else:
+                    left,right=t.bounds
+                    if self.direction(t.bounds)=='to':left,right=right,left
+                    term=Expr('binary','+',[Expr('binary','-',[left,right]),Expr('literal','1')])
+                width=Expr('binary','+',[width,term])
+            if k=='repeat':width=Expr('binary','*',[width,a[0]])
+            return Type(bounds=(Expr('binary','-',[width,Expr('literal','1')]),Expr('literal','0')))
         raise ParseError('unsupported typed expression '+k+' '+v)
     def bits(self,t):
         if t.kind=='integer': return 32
@@ -97,9 +103,12 @@ class VHDLGenerator:
         except ValueError: return None
     def numeric_arg(self,e,t):
         old=self.etype(e);size=self.width(t);cast='signed' if t.signed else 'unsigned'
-        if old.kind=='integer': return ('to_signed' if t.signed else 'to_unsigned')+'('+self.expr(e)+', '+size+')'
+        if old.kind=='integer':
+            value='to_signed('+self.expr(e)+', '+size+')'
+            return value if t.signed else 'unsigned('+value+')'
         if not old.bounds: raise ParseError('scalar arithmetic requires explicit numeric conversion')
-        return 'resize('+cast+'('+self.expr(e)+'), '+size+')'
+        inner=self.expr(e,t) if e.kind=='binary' and e.value in ('+','-','*','/','%','&','|','^') else self.expr(e)
+        return 'resize('+cast+'('+inner+'), '+size+')'
     def boolean(self,e):
         t=self.etype(e); s=self.expr(e)
         if t.kind=='boolean': return s
@@ -113,23 +122,32 @@ class VHDLGenerator:
             elif len(v)==2: s="'"+v[1].upper()+"'" if not expected or not expected.bounds else "(others => '"+v[1].upper()+"')"
             else:
                 m=re.fullmatch(r"(\d+)?'[sS]?([bBoOdDhH])([0-9a-fA-F_xXzZ?]+)",v)
-                size=int(m[1] or 32); digits=m[3].replace('_',''); base=m[2].lower()
+                size=int(m[1] or 32)
+                if not 1<=size<=65536:raise ParseError('literal width outside supported bounds')
+                digits=m[3].replace('_',''); base=m[2].lower()
                 if base=='d': bits=format(int(digits),'b').zfill(size)[-size:]
                 else:
                     per={'b':1,'o':3,'h':4}[base]; bits=''
                     for c in digits:
                         bits+=c.upper().replace('?','Z')*per if c.lower() in 'xz?' else format(int(c,{'b':2,'o':8,'h':16}[base]),f'0{per}b')
-                    bits=bits.zfill(size)[-size:]
+                    padding=bits[0] if bits and bits[0] in 'XZ' else '0'
+                    bits=(padding*max(0,size-len(bits))+bits)[-size:]
                 s=("'"+bits+"'") if size==1 else ('signed' if t.signed else 'unsigned')+"'(\""+bits+'\")'
         elif k=='index': s=self.expr(a[0])+'('+self.integer(a[1])+')'
         elif k=='slice': s=self.expr(a[0])+'('+self.integer(a[1])+' '+self.direction(tuple(a[1:]))+' '+self.integer(a[2])+')'
         elif k=='call': s=('signed' if v=='$signed' else 'unsigned')+'('+self.expr(a[0])+')'
         elif k=='conditional': s='hdl_mux('+self.boolean(a[0])+', '+self.expr(a[1])+', '+self.expr(a[2])+')'
-        elif k=='concat': s='('+ ' & '.join(self.expr(p) for p in a)+')'
+        elif k=='concat':
+            parts=[('unsigned('+self.expr(p)+')') if self.etype(p).bounds else self.expr(p) for p in a]
+            s="unsigned'("+('0 => '+parts[0] if len(parts)==1 and not self.etype(a[0]).bounds else ' & '.join(parts))+')'
         elif k=='repeat':
-            count=literal_int(a[0])
-            if not 1<=count<=1024: raise ParseError('replication bound out of supported range')
-            s='('+' & '.join(self.expr(p) for _ in range(count) for p in a[1].args)+')'
+            count=self.integer(a[0])
+            try:
+                if not 1<=literal_int(a[0])<=65536:raise ParseError('replication bound outside supported range')
+            except ValueError:
+                if a[0].kind not in ('name','binary'):raise ParseError('replication count must be constant')
+            item=self.expr(a[1])
+            s='hdl_repeat('+item+', '+count+')'
         elif k=='unary':
             if v=='!': s='(not '+self.boolean(a[0])+')'
             elif v in ('~','+','-'): s='('+('not ' if v=='~' else v)+self.expr(a[0])+')'
@@ -139,7 +157,14 @@ class VHDLGenerator:
             elif v in ('<<','>>','<<<','>>>'):
                 at=self.etype(a[0])
                 if not at.bounds: raise ParseError('shift requires vector operand')
-                operand=self.expr(a[0]); cast='signed' if at.signed and v=='>>>' else 'unsigned'
+                operand=self.expr(a[0])
+                if expected and expected.bounds:
+                    aw,ew=self.bits(at),self.bits(expected)
+                    if aw is None or ew is None:
+                        if at.bounds!=expected.bounds:raise ParseError('symbolic shift context requires explicit sizing')
+                    elif ew>aw:
+                        at=Type(signed=at.signed,bounds=expected.bounds);operand=self.expr(a[0],at);t=at
+                cast='signed' if at.signed and v=='>>>' else 'unsigned'
                 amount=self.expr(a[1]); bt=self.etype(a[1])
                 if bt.bounds: amount='to_integer('+amount+')'
                 s=('shift_left' if v in ('<<','<<<') else 'shift_right')+'('+cast+'('+operand+'), '+amount+')'
@@ -170,21 +195,16 @@ class VHDLGenerator:
         if expected:
             if expected.kind=='bits' and t.kind=='boolean': return 'hdl_bit('+s+')' if not expected.bounds else 'to_unsigned(boolean\'pos('+s+'), '+self.width(expected)+')'
             if expected.bounds:
-                if t.kind=='integer': return ('to_signed' if expected.signed else 'to_unsigned')+'('+s+', '+self.width(expected)+')'
+                if t.kind=='integer':
+                    value='to_signed('+s+', '+self.width(expected)+')'
+                    return value if expected.signed else 'unsigned('+value+')'
                 if len(v)==2 and k=='literal': return s
                 if not t.bounds: raise ParseError('scalar to vector assignment requires explicit concatenation')
                 # resize preserves sign for signed extension. numeric_std signed
                 # narrowing preserves sign; SV truncates MSBs, so cast unsigned
                 # for narrowing with a statically known smaller destination.
-                try:
-                    tw=abs(literal_int(t.bounds[0])-literal_int(t.bounds[1]))+1
-                    ew=abs(literal_int(expected.bounds[0])-literal_int(expected.bounds[1]))+1
-                except ValueError:
-                    if t.bounds!=expected.bounds: raise ParseError('symbolic resize requires explicit equal ranges')
-                    tw=ew=1
                 if t.bounds!=expected.bounds:
-                    if ew<tw: s='resize(unsigned('+s+'), '+self.width(expected)+')'
-                    else: s='resize('+s+', '+self.width(expected)+')'
+                    s=('hdl_resize' if t.signed else 'resize')+'('+s+', '+self.width(expected)+')'
                 return ('signed' if expected.signed else 'unsigned')+'('+s+')'
             if expected.kind=='integer' and t.bounds: return 'to_integer('+s+')'
             if not expected.bounds and expected.kind=='bits' and t.kind=='integer':
@@ -194,7 +214,16 @@ class VHDLGenerator:
         return s
     def generate(self,design):
         out=['-- Generated by HDL Converter; VHDL-2008. Review WARNING/TODO comments.']
-        for m in design.modules:
+        ordered=[]; visiting=set();visited=set();by_name={m.name:m for m in design.modules}
+        def visit(module):
+            if module.name in visiting:raise ParseError('recursive module instantiation is not synthesizable')
+            if module.name in visited:return
+            visiting.add(module.name)
+            for node in walk(module.statements):
+                if node.kind=='instance' and node.data['module'] in by_name:visit(by_name[node.data['module']])
+            visiting.remove(module.name);visited.add(module.name);ordered.append(module)
+        for module in design.modules:visit(module)
+        for m in ordered:
             self.symbols={d.name:d.type for d in m.parameters+m.ports+m.declarations}
             for _,(t,values) in m.enums.items():
                 for n,_ in values: self.symbols[n]=t
@@ -210,6 +239,8 @@ class VHDLGenerator:
             if ports: out+=self.indent(['port (']+self.indent([';\n        '.join(ports)])+[');'])
             out+=['end entity;','', 'architecture rtl of '+self.name(m.name)+' is']
             out+=self.indent([
+                "function hdl_resize(v : signed; n : positive) return signed is begin if n < v'length then return signed(resize(unsigned(v),n)); else return resize(v,n); end if; end;",
+                "function hdl_repeat(v : unsigned; n : positive) return unsigned is variable r : unsigned(v'length*n-1 downto 0); begin for i in 0 to n-1 loop r((i+1)*v'length-1 downto i*v'length) := v; end loop; return r; end;",
                 "function hdl_bit(b : boolean) return std_logic is begin if b then return '1'; else return '0'; end if; end;",
                 'function hdl_mux(c : boolean; a,b : unsigned) return unsigned is begin if c then return a; else return b; end if; end;',
                 'function hdl_mux(c : boolean; a,b : signed) return signed is begin if c then return a; else return b; end if; end;',
@@ -229,6 +260,7 @@ class VHDLGenerator:
         for n in nodes:
             d=n.data;k=n.kind
             if k=='assignment':
+                if d['target'].kind=='concat':raise ParseError('concatenated assignment target requires VHDL aggregate lowering')
                 name=root_name(d['target']); target_type=self.etype(d['target'])
                 op=':=' if name in self.variables else '<='
                 out.append(self.expr(d['target'])+' '+op+' '+self.expr(d['value'],target_type)+';')

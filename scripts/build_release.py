@@ -27,7 +27,7 @@ def main():
     exclude_args = [part for name in exclusions for part in ('--exclude-module', name)]
     subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean',
         '--onefile', '--console', '--hide-console', 'hide-early', '--noupx',
-        '--optimize', '2', '--name', 'VHDL2SV',
+        '--optimize', '2', '--name', 'HDLConverter',
         '--distpath', str(ROOT/'dist'), '--workpath', str(ROOT/'build'/'pyinstaller'),
         '--specpath', str(ROOT/'build'),
         '--additional-hooks-dir', str(ROOT/'packaging'/'hooks'),
@@ -35,9 +35,9 @@ def main():
         '--add-data', str(ROOT/'THIRD_PARTY_LICENSES.txt') + ';.',
         *exclude_args,
         str(ROOT/'vhdl2sv.py')], cwd=ROOT, env=env, check=True)
-    output = ROOT/'dist'/'VHDL2SV.exe'
+    output = ROOT/'dist'/'HDLConverter.exe'
     digest = hashlib.sha256(output.read_bytes()).hexdigest()
-    (ROOT/'build'/'release.sha256').write_text(f'{digest}  VHDL2SV.exe\n', encoding='ascii')
+    (ROOT/'build'/'release.sha256').write_text(f'{digest}  HDLConverter.exe\n', encoding='ascii')
     print(f'{output}\nSize: {output.stat().st_size:,} bytes\nSHA256: {digest}')
 
 

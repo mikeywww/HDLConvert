@@ -67,7 +67,10 @@ class ExpressionParser:
         else: raise ParseError(f'unsupported expression {value}')
         while self.peek():
             op = self.peek()
-            if op == '[':
+            if op == "'":
+                self.pop(); self.pop('('); value = self.parse(); self.pop(')')
+                left = Expr('cast', '', [left, value])
+            elif op == '[':
                 self.pop(); lo = self.parse()
                 if self.peek() == ':':
                     self.pop(); hi = self.parse(); left = Expr('slice', '', [left, lo, hi])

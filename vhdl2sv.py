@@ -1,4 +1,4 @@
-"""Run python vhdl2sv.py input.vhd [-o output.sv] or --gui."""
+"""Run HDL conversions from the command line or start the native editor GUI."""
 import argparse
 import logging
 import sys
@@ -10,11 +10,11 @@ def main(argv=None):
     if argv is None and getattr(sys, 'frozen', False) and len(sys.argv) == 1:
         argv = ['--gui']
     parser = argparse.ArgumentParser(description='Lightweight HDL Converter: VHDL / Verilog / SystemVerilog')
-    parser.add_argument('--version', action='version', version='VHDL2SV 1.0.0')
+    parser.add_argument('--version', action='version', version='HDL Converter 2.0.0')
     parser.add_argument('--licenses', action='store_true', help='show bundled third-party notices')
     parser.add_argument('--self-test', type=Path, metavar='DIRECTORY', help='test bundled GUI/DnD and conversion in a temporary subdirectory')
     parser.add_argument('inputs', nargs='*', type=Path)
-    parser.add_argument('-o', '--output', type=Path, help='single output .sv file')
+    parser.add_argument('-o', '--output', type=Path, help='single output file; suffix must match --target')
     parser.add_argument('--output-dir', type=Path)
     parser.add_argument('--gui', action='store_true')
     parser.add_argument('--source', choices=('auto','vhdl','verilog','systemverilog','sv'), default='auto')
@@ -37,7 +37,7 @@ def main(argv=None):
         run()
         return 0
     if not args.inputs:
-        parser.error('provide .vhd/.vhdl input or --gui')
+        parser.error('provide .vhd/.vhdl/.v/.sv input or --gui')
     if args.output and (len(args.inputs) != 1 or args.output_dir):
         parser.error('-o requires one input and cannot be combined with --output-dir')
     generics = {}

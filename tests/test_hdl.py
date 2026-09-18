@@ -82,7 +82,7 @@ class SixDirections(unittest.TestCase):
         r=convert_text(src,source_language='vhdl')
         messages=' '.join(d.message for d in r.diagnostics)
         self.assertIn('width 12 does not match signal width 4: fff',messages)
-        self.assertIn('UNCERTAIN',messages)
+        self.assertIn('PRESERVE',messages)
         self.assertIn("logic a = 1'b0",r.text)
         self.assertIn("logic b = 1'b0",r.text)
         self.assertIn('logic [3:0] fff;',r.text)
@@ -93,3 +93,26 @@ class SixDirections(unittest.TestCase):
         self.assertTrue(r.diagnostics)
         self.assertIn('TODO',r.text)
         self.assertIn(source,r.text)
+
+class SafetyBoundaries(unittest.TestCase):
+    def test_wire_declaration_is_continuous(self):
+        from hdl.api import convert_text
+        source='module m(input a, output y); wire t=a; assign y=t; endmodule'
+        r=convert_text(source,target_language='vhdl')
+        self.assertFalse(r.diagnostics)
+        self.assertIn('\\t\\ <= \\a\\;',r.text)
+        self.assertNotIn('\\t\\ : std_logic :=',r.text)
+    def test_multiple_drivers_fail_closed(self):
+        from hdl.api import convert_text
+        r=convert_text('module m(input a,b,output reg q); always @* q=a; always @* q=b; endmodule',target_language='systemverilog')
+        self.assertTrue(r.diagnostics)
+        self.assertIn('No complete target design',r.text)
+    def test_file_failure_preserves_existing_output(self):
+        import tempfile
+        from pathlib import Path
+        from hdl.api import convert_file
+        with tempfile.TemporaryDirectory(dir='build') as folder:
+            src=Path(folder)/'x.sv';out=Path(folder)/'x.vhd'
+            src.write_text('module x(); initial #1 $finish; endmodule');out.write_text('keep')
+            with self.assertRaises(ValueError):convert_file(src,out,target_language='vhdl')
+            self.assertEqual(out.read_text(),'keep')

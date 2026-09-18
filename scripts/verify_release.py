@@ -18,8 +18,8 @@ def main():
     log = []
     with tempfile.TemporaryDirectory(dir=scratch, prefix='独立目录 ') as directory:
         folder = Path(directory)
-        exe = folder/'VHDL2SV.exe'
-        shutil.copy2(ROOT/'dist'/'VHDL2SV.exe', exe)
+        exe = folder/'HDLConverter.exe'
+        shutil.copy2(ROOT/'dist'/'HDLConverter.exe', exe)
 
         def run(args, expected=0):
             result = subprocess.run([str(exe), *map(str, args)], cwd=folder,
@@ -30,29 +30,36 @@ def main():
                 raise RuntimeError(log[-1])
             return result
 
-        if '1.0.0' not in run(['--version']).stdout:
+        if '2.0.0' not in run(['--version']).stdout:
             raise RuntimeError('version missing')
         if 'MIT License' not in run(['--licenses']).stdout:
             raise RuntimeError('notices missing')
         if 'PASS:' not in run(['--self-test', folder]).stdout:
             raise RuntimeError('GUI diagnostic failed')
-        source = folder/'输入 file.vhdl'
-        shutil.copy2(ROOT/'tests'/'vhdl'/'array_test.vhd', source)
-        run([source])
-        if source.with_suffix('.sv').read_text() != (ROOT/'tests'/'expected'/'array_test.sv').read_text():
-            raise RuntimeError('EXE output differs from golden fixture')
-        bad = folder/'bad.vhd'
-        bad.write_text('entity broken', encoding='utf-8')
-        run([bad, source, '--output-dir', folder/'batch'], expected=1)
-        if not (folder/'batch'/source.with_suffix('.sv').name).exists():
-            raise RuntimeError('batch did not continue after failure')
-        shutil.copy2(ROOT/'tests'/'vhdl'/'initializer_drivers.vhd', source)
-        previous = source.with_suffix('.sv').read_bytes()
-        run([source, '--strict'], expected=1)
-        if source.with_suffix('.sv').read_bytes() != previous:
-            raise RuntimeError('strict conversion overwrote output')
+        vhdl = folder/'输入 file.vhdl'
+        shutil.copy2(ROOT/'tests'/'vhdl'/'array_test.vhd', vhdl)
+        run([vhdl])
+        if vhdl.with_suffix('.sv').read_text() != (ROOT/'tests'/'expected'/'array_test.sv').read_text():
+            raise RuntimeError('legacy VHDL-to-SV output differs from golden fixture')
+        sv = folder/'clock logic.sv'
+        sv.write_text("module m(input clk,d,output logic q); always_ff @(posedge clk) q<=d; endmodule", encoding='utf-8')
+        run([sv, '--target', 'vhdl'])
+        if 'rising_edge' not in sv.with_suffix('.vhd').read_text(encoding='utf-8'):
+            raise RuntimeError('SV-to-VHDL output missing clock edge')
+        verilog = folder/'classic.v'
+        verilog.write_text('module m(input a,output y);assign y=a;endmodule', encoding='utf-8')
+        run([verilog, '--target', 'systemverilog'])
+        if 'module m' not in verilog.with_suffix('.sv').read_text(encoding='utf-8'):
+            raise RuntimeError('Verilog-to-SV conversion failed')
+        bad = folder/'bad.sv'
+        bad.write_text('module broken(); initial #1 $finish; endmodule', encoding='utf-8')
+        preserved = folder/'bad.vhd'
+        preserved.write_text('keep', encoding='utf-8')
+        run([bad, '--target', 'vhdl', '-o', preserved], expected=1)
+        if preserved.read_text(encoding='utf-8') != 'keep':
+            raise RuntimeError('failed conversion overwrote output')
     (ROOT/'build'/'release-verification.log').write_text('\n'.join(log), encoding='utf-8')
-    print('PASS: isolated EXE version/licenses, bundled GUI/DnD, Unicode CLI, golden output, batch failures and strict protection')
+    print('PASS: isolated EXE version/licenses, native editor/DnD, Unicode path, legacy golden output, new directions and failure preservation')
 
 
 if __name__ == '__main__':

@@ -10,6 +10,6 @@ class ReleaseEntryTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location('release_entry', Path('vhdl2sv.py'))
         entry = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(entry)
-        with patch.object(sys, 'frozen', True, create=True), patch.object(sys, 'argv', ['VHDL2SV.exe']), patch('gui.run') as gui:
+        with patch.object(sys, 'frozen', True, create=True), patch.object(sys, 'argv', ['HDLConverter.exe']), patch('gui.run') as gui:
             self.assertEqual(entry.main(), 0)
             gui.assert_called_once_with()

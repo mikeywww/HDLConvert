@@ -64,6 +64,7 @@ class Parser:
                     name = p.pop().text; typ = deepcopy(self.enums[name][0]); typ.enum = name
                 while p.peek() in TYPES:
                     word = p.pop().text
+                    if word=='bit':raise ParseError('2-state bit type requires explicit initialization/X semantics lowering')
                     if word in ('integer','int'): typ.kind = 'integer'; typ.signed = True
                     elif word == 'signed': typ.signed = True
                     elif word == 'unsigned': typ.signed = False
@@ -118,6 +119,10 @@ class Parser:
             self.pop('endmodule')
             if self.accept(':'):
                 if self.pop().text != name: raise ParseError('endmodule label mismatch')
+            for decl in module.declarations:
+                if decl.net and decl.value is not None:
+                    module.statements.insert(0,Statement('assignment',dict(target=Expr('name',decl.name),value=decl.value,op='=',concurrent=True),line=decl.line,source=decl.source))
+                    decl.value=None
             module.enums = dict(self.enums); self.mark(module, start)
             if any(not p.direction for p in module.ports): raise ParseError('missing port direction')
             names = [d.name for d in module.parameters + module.ports + module.declarations]

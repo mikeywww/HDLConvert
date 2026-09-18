@@ -1,5 +1,15 @@
 # Validation record
 
+## 2026-09-18 — HDL Converter 2.0 six-direction upgrade
+
+- Automated suite: **69 tests passed**, including all original VHDL-to-SV regressions and four real Icarus compile/simulation scenarios for the new paths.
+- `scripts/validate_six.py`: Vivado compiled original and generated VHDL/SV for all six directions; clock, asynchronous reset, data and blocking combinational ordering matched for 64 cycles.
+- `scripts/validate_numeric.py`: original SV and generated VHDL matched for 512 cycles across unsigned overflow, destination-width arithmetic, signed multiply/shift, compare, FSM, generate, module instances, concatenation and replication.
+- `scripts/editor_smoke.py`: real Tk/tkdnd loaded; a Unicode/spaced `.sv` path was dropped, language inferred, SV converted to VHDL in the worker thread, highlighting/selection/clear exercised.
+- Safety coverage includes continuous semantics for `wire x = expr`, multi/mixed-driver rejection, output preservation on failure, malformed/unsupported source TODO drafts, enum lowering, non-ANSI ports, sized casts, and VHDL initializer width mismatch.
+- Passed scenarios were each run once for the final Stage 10 checkpoint; failures were followed by targeted reruns. This matches the user's request to reduce redundant test rounds.
+- These are finite regressions, not formal equivalence or evidence of 80% real-project coverage. The README lists the conservative language boundary.
+
 ## 2026-09-18 — Stage 11: declaration initializer / driver correction
 
 - Reproduced the old `logic ready_i = 1'b0; assign ready_i = a;` failure with Icarus: “Cannot perform procedural assignment ... because it is also continuously assigned.” Reproducer/log: `build/initializer_before.sv`, `build/initializer_before.log`.

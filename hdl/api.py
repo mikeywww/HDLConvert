@@ -1,8 +1,8 @@
 """One public six-direction API; atomic file output and explicit unsupported drafts.
 
-The mature VHDL backend is retained. Its normalized SV serialization is parsed
-into neutral IR for the new Verilog target. This isolated migration bridge avoids
-reimplementing proven VHDL semantic handling and is documented, not six converters.
+The mature VHDL-to-SV backend is retained for compatibility. The VHDL adapter
+reuses its symbol/expression analysis while mapping structure directly into neutral
+IR for new targets. Verilog and SV share one front end and target-aware generator.
 """
 from pathlib import Path
 import os
@@ -14,7 +14,7 @@ from vhdl2sv.lexer import ParseError, tokenize as vhdl_tokens
 from vhdl2sv.parser import Parser as VHDLParser
 from vhdl2sv.generator import Generator as LegacyGenerator
 from .parser import Parser
-from .verilog import VerilogGenerator
+from .verilog import VerilogGenerator, walk, targets, root_name
 from .vhdl import VHDLGenerator
 from .initialization import analyze
 
@@ -59,15 +59,29 @@ def convert_text(source, *, source_language=None, target_language='systemverilog
             invalid=[d.data['invalid_initializer_source'] for u in design.units for d in u.data.get('decl',[]) if d.data.get('invalid_initializer_source')]
             if invalid:
                 normalized='\n'.join('// TODO: Invalid declaration initializer: '+s.replace('\n','\n// ') for s in invalid)+'\n'+normalized
-            if dst=='systemverilog':return ConversionResult(normalized,diagnostics)
+            if dst=='systemverilog':
+                policy_notes=[d for d in diagnostics if 'power-up behavior' in d.message or 'Initial value width' in d.message]
+                notes=''.join('// WARNING / TODO: '+str(d)+'\n' for d in policy_notes)
+                return ConversionResult(notes+normalized,diagnostics)
             if dst=='vhdl':raise ParseError('same-language VHDL formatting is not a conversion direction')
-            neutral=Parser(normalized,'systemverilog').parse()
+            from .vhdl_adapter import VHDLAdapter
+            neutral=VHDLAdapter(top,architecture,{k.lower():vhdl_tokens(str(v)) for k,v in (generics or {}).items()}).convert(design)
         else:
             if architecture or generics:raise ParseError('architecture/generic overrides apply only to VHDL input')
             neutral=Parser(source,src).parse()
             if top:
                 neutral.modules=[m for m in neutral.modules if m.name==top]
                 if not neutral.modules:raise ParseError('top module not found: '+top)
+        if dst=='vhdl':
+            for module in neutral.modules:
+                owners={}; continuous=set()
+                for n in walk(module.statements):
+                    if n.kind=='process':
+                        for name in targets(n.body):owners[name]=owners.get(name,0)+1
+                        if not n.data['events'] and n.data['flavor']=='always':
+                            diagnostics.append(Diagnostic(n.line,'VHDL process executes at time zero; original Verilog always sensitivity semantics require startup review'))
+                    elif n.kind=='assignment' and n.data['concurrent']:continuous.add(root_name(n.data['target']))
+                if any(count>1 or name in continuous for name,count in owners.items()):raise ParseError('multiple or mixed process drivers require manual ownership review')
         output=VHDLGenerator().generate(neutral) if dst=='vhdl' else VerilogGenerator(dst).generate(neutral)
         if diagnostics:
             prefix='--' if dst=='vhdl' else '//'
