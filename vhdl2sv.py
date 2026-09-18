@@ -7,16 +7,15 @@ from pathlib import Path
 from vhdl2sv.converter import convert_file
 
 
-def hide_private_gui_console():
-    """Hide only a console owned solely by this frozen GUI process."""
+def close_private_gui_console():
+    """Detach a console created solely for this frozen GUI process."""
     if sys.platform != 'win32' or not getattr(sys, 'frozen', False):
         return
     processes = (ctypes.c_ulong * 4)()
     kernel = ctypes.windll.kernel32
     count = kernel.GetConsoleProcessList(processes, len(processes))
-    window = kernel.GetConsoleWindow()
-    if window and count == 1:
-        ctypes.windll.user32.ShowWindow(window, 0)
+    if count == 1:
+        kernel.FreeConsole()
 
 
 def main(argv=None):
@@ -32,6 +31,8 @@ def main(argv=None):
     parser.add_argument('--gui', action='store_true')
     parser.add_argument('--source', choices=('auto','vhdl','verilog','systemverilog','sv'), default='auto')
     parser.add_argument('--target', choices=('vhdl','verilog','systemverilog','sv'), default='systemverilog')
+    parser.add_argument('--output-encoding', choices=('gb2312','gbk','utf-8'), default='gb2312',
+                        help='output file encoding (default: gb2312)')
     parser.add_argument('--top')
     parser.add_argument('--architecture', '--arch')
     parser.add_argument('-g', '--generic', action='append', default=[], metavar='NAME=VALUE')
@@ -46,7 +47,7 @@ def main(argv=None):
         run(args.self_test)
         return 0
     if args.gui:
-        hide_private_gui_console()
+        close_private_gui_console()
         from gui import run
         run()
         return 0
@@ -77,9 +78,9 @@ def main(argv=None):
             if args.dependency and not legacy:
                 raise ValueError('--dependency currently supports only VHDL to SystemVerilog')
             if legacy:
-                result = convert_file(source, output, top=args.top, architecture=args.architecture, generics=generics, dependencies=args.dependency, strict=args.strict)
+                result = convert_file(source, output, top=args.top, architecture=args.architecture, generics=generics, dependencies=args.dependency, strict=args.strict, output_encoding=args.output_encoding)
             else:
-                result = convert_hdl(source, output, source_language=None if args.source=='auto' else args.source, target_language=target, top=args.top, architecture=args.architecture, generics=generics, strict=args.strict)
+                result = convert_hdl(source, output, source_language=None if args.source=='auto' else args.source, target_language=target, top=args.top, architecture=args.architecture, generics=generics, strict=args.strict, output_encoding=args.output_encoding)
             for diagnostic in result.diagnostics:
                 logging.warning('%s: line %s: %s', source.name, diagnostic.line, diagnostic.message)
             warned += bool(result.diagnostics)

@@ -15,6 +15,8 @@ def main():
     root=TkinterDnD.Tk();root.withdraw()
     try:
         app=EditorApp(root,DND_FILES);root.update()
+        assert root.title()=='HDL 转换工具'
+        assert app.output_encoding.get()=='GB2312'
         app.drop(SimpleNamespace(data=root.tk.call('list',str(path))))
         assert app.source_language.get()=='SystemVerilog'
         assert app.target_language.get()=='VHDL'
@@ -25,6 +27,6 @@ def main():
         assert app.source.text.tag_ranges('keyword')
         app.source.select_all();assert app.source.text.tag_ranges('sel')
         app.clear();assert not app.source.get() and not app.output.get()
-        print('PASS: native editor/TkDND Unicode drop, language inference, worker conversion, highlight, selection and clear')
+        print('PASS: Chinese editor/default encoding, TkDND Unicode drop, language inference, worker conversion, highlight, selection and clear')
     finally:root.destroy()
 if __name__=='__main__':main()

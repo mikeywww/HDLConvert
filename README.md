@@ -19,7 +19,7 @@ VHDL ↔ Verilog ↔ SystemVerilog
 .\HDLConverter.exe --gui
 ```
 
-Windows x64 发布版目标小于 20 MB。双击 EXE 只显示软件窗口，不保留终端窗口；从现有终端调用时仍保留 CLI 输出。程序为单文件，启动时会把 Python/Tcl/Tk/tkdnd 运行库解压到用户临时目录，退出后清理。当前 EXE 未进行 Authenticode 签名。
+Windows x64 发布版目标小于 20 MB。双击 EXE 只显示中文软件窗口，并直接关闭程序自建的终端窗口；从现有终端调用 CLI 时仍保留输出。程序为单文件，启动时会把 Python/Tcl/Tk/tkdnd 运行库解压到用户临时目录，退出后清理。当前 EXE 未进行 Authenticode 签名。
 
 ## 从源码运行
 
@@ -33,12 +33,12 @@ python vhdl2sv.py --gui
 
 ## GUI
 
-GUI 使用 tkinter/ttk，保持 Windows 10 原生桌面工具风格。工作流：
+GUI 使用 tkinter/ttk，保持 Windows 10 原生桌面工具风格，界面文字为中文。工作流：
 
 1. 拖入 `.vhd`、`.vhdl`、`.v` 或 `.sv`，也可点击 Open 或粘贴代码。
 2. 检查自动识别的 Source Language，选择 Target Language。
 3. 点击 Convert 或按 F5。
-4. 查看 Warning / Log，然后 Copy 或 Save As。
+4. 选择输出编码（默认 GB2312，可选 GBK、UTF-8），查看警告/日志，然后复制结果或另存为。
 
 左右编辑区提供行号、基本语法高亮、撤销/重做和 `Ctrl+A/C/V/Z/Y`。编辑器一次打开一个文件；批量转换使用 CLI。
 
@@ -50,11 +50,12 @@ python vhdl2sv.py input.vhdl --target systemverilog -o output.sv
 python vhdl2sv.py input.v --target vhdl
 python vhdl2sv.py input.sv --target verilog
 python vhdl2sv.py a.v b.sv --target vhdl --output-dir converted
+python vhdl2sv.py input.vhd --target systemverilog --output-encoding utf-8
 ```
 
 `--source auto` 默认按扩展名识别，也可显式选择 `vhdl`、`verilog` 或 `systemverilog`。输出后缀由 `--target` 决定：`.vhd`、`.v` 或 `.sv`。已有目标文件仅在完整转换成功后原子替换；错误或 `--strict` 警告不会破坏旧文件。
 
-输入文件支持 UTF-8（含 BOM）、GB2312 和 GBK；输出统一保存为 UTF-8。
+输入文件支持 UTF-8（含 BOM）、GB2312 和 GBK。输出默认使用 GB2312，可通过 GUI 选择 GBK/UTF-8，或通过 CLI 的 `--output-encoding gb2312|gbk|utf-8` 指定。
 
 VHDL→SystemVerilog 的成熟路径仍支持：
 
@@ -100,6 +101,8 @@ process 变量只有在每条可能读取路径上都先经过完整赋值时才
 - 文本 API 返回 WARNING/TODO 和注释后的原始代码；
 - 文件 API/CLI 不写出不完整设计，也不覆盖现有输出；
 - 可用 `--strict` 阻止任何带 warning 的输出。
+
+声明初值的 `PRESERVE` / `UNCERTAIN` 提示只写入 GUI/CLI 日志，不再插入生成的 HDL 文件。
 
 Verilog/SV 与 VHDL 在 process 启动、delta cycle、四值/九值逻辑、unsized literal、signedness 和表达式位宽上存在语言差异。工具只在能够明确映射时转换；warning 输出必须人工复核并通过工程级仿真/综合验收。
 

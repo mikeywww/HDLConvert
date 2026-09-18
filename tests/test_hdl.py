@@ -86,6 +86,8 @@ class SixDirections(unittest.TestCase):
         self.assertIn("logic a = 1'b0",r.text)
         self.assertIn("logic b = 1'b0",r.text)
         self.assertIn('logic [3:0] fff;',r.text)
+        self.assertNotIn('declaration initialization preserved:',r.text)
+        self.assertNotIn('power-up behavior may depend',r.text)
     def test_unsupported_preserves_source(self):
         from hdl.api import convert_text
         source='module m(); initial #5 $finish; endmodule'

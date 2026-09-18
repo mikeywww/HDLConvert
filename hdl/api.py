@@ -13,7 +13,7 @@ from vhdl2sv.converter import ConversionResult
 from vhdl2sv.lexer import ParseError, tokenize as vhdl_tokens
 from vhdl2sv.parser import Parser as VHDLParser
 from vhdl2sv.generator import Generator as LegacyGenerator
-from vhdl2sv.encoding import read_source
+from vhdl2sv.encoding import read_source, output_codec
 from .parser import Parser
 from .verilog import VerilogGenerator, walk, targets, root_name
 from .vhdl import VHDLGenerator
@@ -61,9 +61,7 @@ def convert_text(source, *, source_language=None, target_language='systemverilog
             if invalid:
                 normalized='\n'.join('// TODO: Invalid declaration initializer: '+s.replace('\n','\n// ') for s in invalid)+'\n'+normalized
             if dst=='systemverilog':
-                policy_notes=[d for d in diagnostics if 'power-up behavior' in d.message or 'Initial value width' in d.message]
-                notes=''.join('// WARNING / TODO: '+str(d)+'\n' for d in policy_notes)
-                return ConversionResult(notes+normalized,diagnostics)
+                return ConversionResult(normalized,diagnostics)
             if dst=='vhdl':raise ParseError('same-language VHDL formatting is not a conversion direction')
             from .vhdl_adapter import VHDLAdapter
             neutral=VHDLAdapter(top,architecture,{k.lower():vhdl_tokens(str(v)) for k,v in (generics or {}).items()}).convert(design)
@@ -84,9 +82,10 @@ def convert_text(source, *, source_language=None, target_language='systemverilog
                     elif n.kind=='assignment' and n.data['concurrent']:continuous.add(root_name(n.data['target']))
                 if any(count>1 or name in continuous for name,count in owners.items()):raise ParseError('multiple or mixed process drivers require manual ownership review')
         output=VHDLGenerator().generate(neutral) if dst=='vhdl' else VerilogGenerator(dst).generate(neutral)
-        if diagnostics:
+        inline_diagnostics=[d for d in diagnostics if 'declaration initialization preserved:' not in d.message]
+        if inline_diagnostics:
             prefix='--' if dst=='vhdl' else '//'
-            output='\n'.join(prefix+' WARNING / TODO: '+str(d) for d in diagnostics)+'\n'+output
+            output='\n'.join(prefix+' WARNING / TODO: '+str(d) for d in inline_diagnostics)+'\n'+output
         return ConversionResult(output,diagnostics)
     except (ParseError,ValueError,ZeroDivisionError) as exc:
         message=str(exc)
@@ -95,7 +94,8 @@ def convert_text(source, *, source_language=None, target_language='systemverilog
         return ConversionResult(comment_draft(source,dst,message),diagnostics)
 
 
-def convert_file(input_path,output_path=None,*,source_language=None,target_language='systemverilog',strict=False,**options):
+def convert_file(input_path,output_path=None,*,source_language=None,target_language='systemverilog',strict=False,
+                 output_encoding='gb2312',**options):
     src=Path(input_path).resolve();dst=language(target_language)
     source=read_source(src)
     src_lang=source_language or detect_language(source,src)
@@ -109,7 +109,7 @@ def convert_file(input_path,output_path=None,*,source_language=None,target_langu
     if 'No complete target design emitted.' in result.text:raise ParseError(result.diagnostics[-1].message)
     out.parent.mkdir(parents=True,exist_ok=True);temp=None
     try:
-        with tempfile.NamedTemporaryFile('w',encoding='utf-8',newline='\n',dir=out.parent,delete=False) as f:
+        with tempfile.NamedTemporaryFile('w',encoding=output_codec(output_encoding),newline='\n',dir=out.parent,delete=False) as f:
             temp=Path(f.name);f.write(result.text)
         os.replace(temp,out)
     finally:

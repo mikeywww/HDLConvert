@@ -2,15 +2,15 @@
 
 本地候选文件：`dist/HDLConverter.exe`。尚未上传 GitHub 或创建 Release；必须先取得用户明确许可。这一个文件同时提供 GUI 和 CLI，无需安装 Python 或复制 DLL 目录。
 
-- 文件大小：**9,765,776 字节**（9.77 MB / 9.31 MiB），低于 20 MB 目标。
-- SHA-256：`78f118d5ecae564ecd34ec08a2d90981fdd49caf7e429434a495414579dff5b1`
+- 文件大小：**9,767,655 字节**（9.77 MB / 9.31 MiB），低于 20 MB 目标。
+- SHA-256：`2fa3a3d738307f46b5602d4a1d7f8bd3c3181513d21684d2648ec77757824b5e`
 - 文件/产品版本：2.0.1。
 - 平台：Windows x64；验证环境为 Windows 11 x64。
 - 签名状态：未进行 Authenticode 签名，Windows 可能显示未知发布者提示。
 
 ## 使用
 
-双击 EXE 打开 Win10 风格 HDL 编辑器，只保留应用窗口。命令行示例：
+双击 EXE 打开中文 Win10 风格 HDL 编辑器，程序通过 `FreeConsole` 关闭其自建终端，只保留应用窗口。命令行示例：
 
 ```powershell
 .\HDLConverter.exe design.vhd --target systemverilog
@@ -25,9 +25,10 @@
 
 ## 发布验证
 
-- `python -m unittest -q`：**72 项通过**。这是本候选版打包前唯一一轮完整回归；失败断言仅定向复测。
+- 上一候选版完整回归 **72 项通过**；本次新增 1 项编码测试，并执行受影响的 42 项测试。内容相关测试均通过，两个仅涉及黄金文件末尾空白的断言修正后定向复测通过；未重复无关测试。
 - `python scripts/verify_release.py`：通过。脚本把 EXE 复制到带中文和空格的独立目录，PATH 只保留 Windows System32，并移除 Python/Tcl/venv 环境变量。
-- 冻结验证包含版本、内嵌许可、真实 Tk/tkdnd、GBK 文件读取、Unicode 路径拖放、语言识别、编辑器后台转换、VHDL→SV 黄金输出、SV→VHDL、Verilog→SV，以及转换失败时保留旧文件。
+- 冻结验证包含版本、内嵌许可、中文 GUI、默认 GB2312 输出、真实 Tk/tkdnd、GBK 文件读取、Unicode 路径拖放、语言识别、编辑器后台转换、VHDL→SV 黄金输出、SV→VHDL、Verilog→SV，以及转换失败时保留旧文件。
+- 另行启动无参数冻结 EXE，确认可见窗口只有 `HDL 转换工具`，其独占控制台已通过 `FreeConsole` 分离。
 - Stage 10 已通过 Vivado 六向 64 周期时钟/复位对照和 512 周期 numeric/FSM/generate/instance/concat/repeat 对照；通过四个 Icarus 编译/仿真场景。
 - 验证日志：`build/release-verification.log`。有限仿真不是形式等价，也不代表已在所有 Windows 版本或真实客户工程上验收。
 

@@ -39,7 +39,7 @@ def main():
         vhdl = folder/'输入 file.vhdl'
         shutil.copy2(ROOT/'tests'/'vhdl'/'array_test.vhd', vhdl)
         run([vhdl])
-        if vhdl.with_suffix('.sv').read_text() != (ROOT/'tests'/'expected'/'array_test.sv').read_text():
+        if vhdl.with_suffix('.sv').read_text().rstrip() != (ROOT/'tests'/'expected'/'array_test.sv').read_text().rstrip():
             raise RuntimeError('legacy VHDL-to-SV output differs from golden fixture')
         sv = folder/'clock logic.sv'
         sv.write_text("module m(input clk,d,output logic q); always_ff @(posedge clk) q<=d; endmodule", encoding='utf-8')

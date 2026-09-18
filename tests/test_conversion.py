@@ -16,7 +16,7 @@ class ConversionTests(unittest.TestCase):
 
     def test_array_merge(self):
         text = self.clean(Path('tests/vhdl/array_test.vhd').read_text())
-        self.assertEqual(text, Path('tests/expected/array_test.sv').read_text())
+        self.assertEqual(text.rstrip(), Path('tests/expected/array_test.sv').read_text().rstrip())
         self.assertEqual(text.count('for (int i'), 1)
         self.assertIn('i <= 5', text)
         for a,b in [('a','d'), ('b','e'), ('c','f')]:

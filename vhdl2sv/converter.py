@@ -6,7 +6,7 @@ import tempfile
 from .parser import Parser
 from .generator import Generator
 from .lexer import ParseError, tokenize
-from .encoding import read_source
+from .encoding import read_source, output_codec
 
 
 @dataclass
@@ -22,7 +22,8 @@ def convert_text(source, *, top=None, architecture=None, generics=None):
     return ConversionResult(output, generator.diagnostics)
 
 
-def convert_file(input_path, output_path=None, *, dependencies=(), strict=False, **options):
+def convert_file(input_path, output_path=None, *, dependencies=(), strict=False,
+                 output_encoding='gb2312', **options):
     source = Path(input_path).resolve()
     if source.suffix.lower() not in ('.vhd', '.vhdl'):
         raise ValueError('input must be .vhd or .vhdl')
@@ -52,7 +53,7 @@ def convert_file(input_path, output_path=None, *, dependencies=(), strict=False,
     output.parent.mkdir(parents=True, exist_ok=True)
     temp_path = None
     try:
-        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', newline='\n', dir=output.parent, suffix='.tmp', delete=False) as stream:
+        with tempfile.NamedTemporaryFile(mode='w', encoding=output_codec(output_encoding), newline='\n', dir=output.parent, suffix='.tmp', delete=False) as stream:
             temp_path = Path(stream.name)
             stream.write(result.text)
         os.replace(temp_path, output)

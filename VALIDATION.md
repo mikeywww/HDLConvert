@@ -1,5 +1,14 @@
 # Validation record
 
+## 2026-09-18 — Stage 14: Chinese GUI, output encoding and console detachment
+
+- GUI visible text is Chinese and includes an output-encoding selector: GB2312 by default, with GBK and UTF-8 choices. CLI adds `--output-encoding` with the same default and choices; both file APIs use the shared codec validation.
+- Frozen GUI uses `FreeConsole` when the console is owned solely by the GUI process. A no-argument EXE launch showed the `HDL 转换工具` window and detached the owned console; shared CLI terminals are not detached.
+- `declaration initialization preserved` / `power-up behavior` diagnostics remain in CLI/GUI logs but are no longer injected into generated HDL. The 500-line DDR3 fixture was regenerated without those comments.
+- Relevant regression: 30 CLI/HDL/initializer tests passed; 12 conversion tests were run, with a trailing-whitespace-only golden assertion corrected and targeted recheck passed. Native Chinese editor smoke passed. Unrelated passed tests were not repeated per user request.
+- Frozen isolated verification passed after the same trailing-whitespace comparison correction. Local EXE: 9,767,655 bytes; SHA-256 `2fa3a3d738307f46b5602d4a1d7f8bd3c3181513d21684d2648ec77757824b5e`.
+- This remains a local 2.0.1 candidate. No push, tag, GitHub upload, or Release is authorized yet.
+
 ## 2026-09-18 — Stage 13: initializer cleanup, Chinese encodings and local 2.0.1 EXE
 
 - Proven redundant combinational signal initializers are removed without generated comments or diagnostics. Process-variable initializers are removed only when every possible read is preceded by a whole assignment; read-before-write, incomplete branches and partial writes preserve them.

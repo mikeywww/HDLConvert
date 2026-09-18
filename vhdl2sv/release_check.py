@@ -14,6 +14,8 @@ def run(directory):
     root.withdraw()
     try:
         app = EditorApp(root, DND_FILES)
+        if root.title() != 'HDL 转换工具' or app.output_encoding.get() != 'GB2312':
+            raise RuntimeError('Chinese GUI/default output encoding failed')
         with tempfile.TemporaryDirectory(dir=directory, prefix='release-check-') as scratch:
             source = Path(scratch)/'中文 input.sv'
             source.write_bytes(('// 中文 GBK input\nmodule smoke(input clk,d,output logic q); '
@@ -31,6 +33,6 @@ def run(directory):
                 time.sleep(.02)
             if app.busy or 'rising_edge' not in app.output.get():
                 raise RuntimeError('editor worker conversion failed')
-        print('PASS: bundled Tk/tkdnd, Unicode drop, GBK decoding, language inference and editor conversion')
+        print('PASS: Chinese GUI, default GB2312 output, bundled Tk/tkdnd, Unicode drop, GBK decoding, language inference and editor conversion')
     finally:
         root.destroy()

@@ -54,3 +54,14 @@ class CliTests(unittest.TestCase):
                     source.write_bytes(text.encode(encoding))
                     result = convert_file(source, strict=True)
                     self.assertIn('module demo', result.text)
+
+    def test_output_encoding_default_and_override(self):
+        with tempfile.TemporaryDirectory(dir='.') as directory:
+            source = Path(directory)/'encoding.vhd'
+            source.write_text('-- psl 中文测试\n'+unit(body='q<=d;'), encoding='utf-8')
+            default_output = Path(directory)/'default.sv'
+            convert_file(source, default_output)
+            self.assertIn('中文测试', default_output.read_bytes().decode('gb2312'))
+            utf8_output = Path(directory)/'utf8.sv'
+            convert_file(source, utf8_output, output_encoding='utf-8')
+            self.assertIn('中文测试', utf8_output.read_bytes().decode('utf-8'))
