@@ -1,6 +1,6 @@
-# HDLConvert 2.0.2 local candidate — Windows x64
+# HDLConvert 2.0.2 — Windows x64
 
-本地候选文件：`dist/HDLConvert.exe`，尚未发布。这一个文件同时提供 GUI 和 CLI，无需安装 Python 或复制 DLL 目录。
+发布文件：`dist/HDLConvert.exe`，可从 [GitHub Release](https://github.com/mikeywww/HDLConvert/releases/tag/v2.0.2) 下载。这一个文件同时提供 GUI 和 CLI，无需安装 Python 或复制 DLL 目录。
 
 - 文件大小：**9,770,726 字节**（9.77 MB / 9.32 MiB），低于 20 MB 目标。
 - SHA-256：`a10d782a233f9332d5e3d7d33aedf10317e1163065d6162b77b58fae317b6496`
