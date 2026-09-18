@@ -1,5 +1,14 @@
 # Validation record
 
+## 2026-09-18 — Stage 15: complete HDLConvert rename
+
+- Renamed the Python package to `hdlconvert`, entry point to `hdlconvert.py`, generated-code branding to `HDLConvert`, Windows product metadata and artifact to `HDLConvert.exe`, and canonical workspace to `D:\WORK\PRJ\HDLConvert`.
+- Renamed the public GitHub repository to `mikeywww/HDLConvert`, updated links and remote, and pushed source commit `bafa896` after the rename regression.
+- One complete post-rename regression: **73 tests passed**. The new canonical workspace produced the one-file EXE and isolated frozen verification passed.
+- Direct frozen launch showed only the `HDLConvert` GUI and detached its owned console.
+- Local `dist/HDLConvert.exe`: 9,767,007 bytes; SHA-256 `b48ed4e9829cd1a80369613ddbb520d50dc9ce1ae5fa7350693284dc276d98af`.
+- No v2.0.1 GitHub Release or EXE upload was performed; that still requires explicit approval.
+
 ## 2026-09-18 — Stage 14: Chinese GUI, output encoding and console detachment
 
 - GUI visible text is Chinese and includes an output-encoding selector: GB2312 by default, with GBK and UTF-8 choices. CLI adds `--output-encoding` with the same default and choices; both file APIs use the shared codec validation.
