@@ -1,0 +1,15 @@
+reference/
+__pycache__/
+.venv/
+build/
+dist/
+*.log
+*.jou
+*.str
+*.pb
+.Xil/
+
+# Local project inputs and private recovery/mail records
+test1/
+WORK_STATE.md
+WORK_STATUS.md
