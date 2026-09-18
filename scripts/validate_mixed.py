@@ -7,7 +7,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from vhdl2sv.converter import convert_file
+from hdlconvert.converter import convert_file
 
 directory = ROOT/'build'/'mixed_sim'
 directory.mkdir(parents=True, exist_ok=True)

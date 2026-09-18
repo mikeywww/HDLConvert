@@ -5,11 +5,11 @@ parsed immediately into Expr nodes; structural nodes are mapped directly.
 """
 import copy
 import re
-from vhdl2sv.generator import Generator
-from vhdl2sv.symbols import Symbols, TypeInfo
-from vhdl2sv.ast import Node
-from vhdl2sv.lexer import ParseError, words, split as v_split
-from vhdl2sv.drivers import combinational_targets, redundant_variable_initializers
+from hdlconvert.generator import Generator
+from hdlconvert.symbols import Symbols, TypeInfo
+from hdlconvert.ast import Node
+from hdlconvert.lexer import ParseError, words, split as v_split
+from hdlconvert.drivers import combinational_targets, redundant_variable_initializers
 from .ir import Design, Module, Declaration, Statement, Type, Expr
 from .parser import Parser
 from .lex import expression, tokenize

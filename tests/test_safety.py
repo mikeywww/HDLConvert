@@ -1,7 +1,7 @@
 from pathlib import Path
 import tempfile
 import unittest
-from vhdl2sv.converter import convert_text, convert_file
+from hdlconvert.converter import convert_text, convert_file
 from tests.test_conversion import unit
 
 

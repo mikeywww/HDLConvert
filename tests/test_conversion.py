@@ -1,7 +1,7 @@
 import tempfile
 from pathlib import Path
 import unittest
-from vhdl2sv.converter import convert_text, convert_file
+from hdlconvert.converter import convert_text, convert_file
 
 
 def unit(declarations='', body='', ports='clk: in std_logic; rst: in std_logic; d: in std_logic; q: out std_logic'):

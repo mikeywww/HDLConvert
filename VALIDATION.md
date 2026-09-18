@@ -15,10 +15,10 @@
 - UTF-8/BOM, GB2312 and GBK source decoding now uses one shared path across CLI, GUI and dependency files; output remains UTF-8.
 - Frozen GUI retains the console/`hide-early` hybrid and additionally hides a console owned only by the frozen GUI process. Existing-terminal CLI output remains available.
 - `python -m unittest -q`: **72 tests passed** in one complete run after targeted failure correction. `python scripts/verify_release.py`: passed once, including frozen GBK GUI loading.
-- Local candidate `dist/HDLConverter.exe`: version 2.0.1, 9,765,776 bytes, SHA-256 `78f118d5ecae564ecd34ec08a2d90981fdd49caf7e429434a495414579dff5b1`.
+- Earlier local candidate `dist/HDLConvert.exe`: version 2.0.1; superseded by the current renamed build recorded in RELEASE.md.
 - Publication is intentionally paused. Do not push, tag, upload, or create a GitHub Release until the user explicitly approves this candidate.
 
-## 2026-09-18 — HDL Converter 2.0 six-direction upgrade
+## 2026-09-18 — HDLConvert 2.0 six-direction upgrade
 
 - Automated suite: **69 tests passed**, including all original VHDL-to-SV regressions and four real Icarus compile/simulation scenarios for the new paths.
 - `scripts/validate_six.py`: Vivado compiled original and generated VHDL/SV for all six directions; clock, asynchronous reset, data and blocking combinational ordering matched for 64 cycles.
@@ -35,13 +35,13 @@
 - `python -m unittest -q`: **50 passed**, including **11 SV compiler/simulation tests**. New coverage: conditional ready expression, per-name declarations, process branch coverage, with-select, whole-array assignments, retained register/constant/variable values, incomplete/partial/generate/feedback cases, case-insensitive scoped names and strict output protection.
 - Generated `tests/vhdl/initializer_drivers.vhd` output compiled and simulated successfully; register starts at 1 before any clock and continues to operate after clock edges.
 - Vivado 2025.2 synthesis plus `report_drc -checks {MDRV-1}`: **0 errors, 0 critical warnings, 0 MDRV-1 violations**. Explicit post-synthesis assertion confirms register `INIT=1`. One ordinary warning removes unused temporary `v_reg`.
-- Reproduce: `python vhdl2sv.py tests/vhdl/initializer_drivers.vhd -o build/initializer_drivers.sv`, then `vivado -mode batch -source scripts/validate_initializers.tcl -log build/initializer_vivado.log -journal build/initializer_vivado.jou`.
+- Reproduce: `python hdlconvert.py tests/vhdl/initializer_drivers.vhd -o build/initializer_drivers.sv`, then `vivado -mode batch -source scripts/validate_initializers.tcl -log build/initializer_vivado.log -journal build/initializer_vivado.jou`.
 - Evidence: `build/initializer_vivado.log`, `build/initializer_synth/drivers.rpt`. Marker: `INITIALIZER_SYNTHESIS_PASS`.
 - Limit: partial targets, incomplete branches, feedback, generate and instance-bound drivers are not automatically stripped and still require review. This is not a complete multiple-driver/latch analysis.
 
 ## Stage 10 baseline
 
-Date: 2026-09-17. Workspace: `D:\WORK\PRJ\VHDL2SV`.
+Date: 2026-09-17. Current workspace: `D:\WORK\PRJ\HDLConvert`.
 
 ## Automated regression
 
@@ -54,7 +54,7 @@ Date: 2026-09-17. Workspace: `D:\WORK\PRJ\VHDL2SV`.
 - Warning paths: unknown identifiers, ambiguous clock structure, differing source/target array ranges, delta-cycle read-after-write, unsupported numeric types, PSL comments. Strict mode and malformed input preserve existing files.
 - **10 Icarus compiler/simulation tests**: signed/unsigned resize (all 256 byte values); clock/reset/variable ordering; nonzero and descending 2D array copies; case/slice/concat; package function; mod sign and overflow; intermediate numeric_std overflow/scalar multiplication/negative shift; nested generate with component instances; record/subtype and SV reserved identifier escaping.
 
-`python -m compileall -q vhdl2sv gui.py vhdl2sv.py scripts tests`: passed.
+`python -m compileall -q hdlconvert gui.py hdlconvert.py scripts tests`: passed.
 
 ## Windows GUI
 
@@ -73,7 +73,7 @@ Vivado 2025.2, `xc7a35tcpg236-1`, `scripts/validate_vivado.tcl`:
 
 The four normal warnings remove unused snapshot indices 3/4/5 and count. These are expected because only snapshot(6) and FSM output are observed. Synthesis is not timing closure; no project XDC or implementation run was supplied/requested.
 
-Evidence: `build/vivado.log`, `build/vivado/*_utilization.rpt`, `build/vivado/*.dcp`. Log contains `VHDL2SV_VIVADO_SYNTHESIS_PASS`.
+Evidence: `build/vivado.log`, `build/vivado/*_utilization.rpt`, `build/vivado/*.dcp`. Current marker is `HDLCONVERT_VIVADO_SYNTHESIS_PASS`.
 
 ## Original VHDL versus generated SV
 

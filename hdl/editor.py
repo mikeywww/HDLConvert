@@ -6,7 +6,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from .api import convert_text, detect_language, SUFFIX
-from vhdl2sv.encoding import read_source, output_codec
+from hdlconvert.encoding import read_source, output_codec
 
 LABELS={'自动检测':'auto','VHDL':'vhdl','Verilog':'verilog','SystemVerilog':'systemverilog'}
 NAMES={v:k for k,v in LABELS.items()}
@@ -80,7 +80,7 @@ class CodeEditor(ttk.Frame):
 class EditorApp:
     def __init__(self,root,dnd_type=None):
         self.root=root;self.busy=False;self.events=queue.Queue();self.path=None;self.output_language=None
-        root.title('HDL 转换工具');root.geometry('1120x740');root.minsize(780,520)
+        root.title('HDLConvert');root.geometry('1120x740');root.minsize(780,520)
         style=ttk.Style(root)
         if 'vista' in style.theme_names():style.theme_use('vista')
         style.configure('.',font=('Segoe UI',10))

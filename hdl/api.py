@@ -8,12 +8,12 @@ from pathlib import Path
 import os
 import re
 import tempfile
-from vhdl2sv.ast import Diagnostic
-from vhdl2sv.converter import ConversionResult
-from vhdl2sv.lexer import ParseError, tokenize as vhdl_tokens
-from vhdl2sv.parser import Parser as VHDLParser
-from vhdl2sv.generator import Generator as LegacyGenerator
-from vhdl2sv.encoding import read_source, output_codec
+from hdlconvert.ast import Diagnostic
+from hdlconvert.converter import ConversionResult
+from hdlconvert.lexer import ParseError, tokenize as vhdl_tokens
+from hdlconvert.parser import Parser as VHDLParser
+from hdlconvert.generator import Generator as LegacyGenerator
+from hdlconvert.encoding import read_source, output_codec
 from .parser import Parser
 from .verilog import VerilogGenerator, walk, targets, root_name
 from .vhdl import VHDLGenerator

@@ -5,7 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def checkpoint(stage, completed, files, tests, issues, next_step, history, mail='Pending Gmail send'):
-    status = f'''# VHDL2SV Work Status
+    status = f'''# HDLConvert Work Status
 
 ## Stage
 {stage}
@@ -26,7 +26,7 @@ def checkpoint(stage, completed, files, tests, issues, next_step, history, mail=
 {next_step}
 
 ## Resume Context
-工作目录 D:\\WORK\\PRJ\\VHDL2SV。先读 WORK_STATE.md、WORK_STATUS.md、DEV_NOTES.md、README.md（如存在），再执行验证命令。
+工作目录 D:\\WORK\\PRJ\\HDLConvert。先读 WORK_STATE.md、WORK_STATUS.md、DEV_NOTES.md、README.md（如存在），再执行验证命令。
 核心 Parser.parse → Generator.generate → converter.convert_file；CLI/GUI 必须共享核心。
 参考代码只读，所有测试产物写 build/。80–90% 是目标，尚未以真实项目语料测量。
 
@@ -37,7 +37,7 @@ def checkpoint(stage, completed, files, tests, issues, next_step, history, mail=
 {history}
 '''
     (ROOT/'WORK_STATUS.md').write_text(status, encoding='utf-8')
-    state = f'''# VHDL2SV Work State
+    state = f'''# HDLConvert Work State
 
 ## 当前阶段
 {stage}
@@ -63,7 +63,7 @@ def checkpoint(stage, completed, files, tests, issues, next_step, history, mail=
 ## 验证命令
 ```powershell
 python -m unittest -v
-python vhdl2sv.py tests/vhdl/array_test.vhd -o build/array_test.sv
+python hdlconvert.py tests/vhdl/array_test.vhd -o build/array_test.sv
 ```
 {tests}
 

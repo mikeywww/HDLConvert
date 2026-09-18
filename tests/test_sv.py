@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from vhdl2sv.converter import convert_text
+from hdlconvert.converter import convert_text
 from tests.test_conversion import unit
 
 

@@ -1,7 +1,7 @@
 """Balanced-token recursive parser for a deliberately bounded Verilog/SV RTL subset."""
 from copy import deepcopy
 import re
-from vhdl2sv.lexer import ParseError
+from hdlconvert.lexer import ParseError
 from .ir import Design, Module, Declaration, Type, Statement, Expr
 from .lex import tokenize, expression, split, literal_int
 

@@ -1,8 +1,8 @@
 """Conservative VHDL declaration initialization checks; reset statements untouched."""
 import re
-from vhdl2sv.ast import Diagnostic
-from vhdl2sv.drivers import combinational_targets, read_names
-from vhdl2sv.lexer import words
+from hdlconvert.ast import Diagnostic
+from hdlconvert.drivers import combinational_targets, read_names
+from hdlconvert.lexer import words
 from .ir import InitPolicy
 from .lex import expression, tokenize, literal_int
 

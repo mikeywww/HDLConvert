@@ -1,4 +1,4 @@
-# HDL Converter
+# HDLConvert
 
 面向 Vivado/FPGA 常见可综合 RTL 的轻量转换工具，支持：
 
@@ -10,13 +10,13 @@ VHDL ↔ Verilog ↔ SystemVerilog
 
 ## Windows 单文件版
 
-从 [GitHub Releases](https://github.com/mikeywww/VHDL2SV/releases/latest) 下载 `HDLConverter.exe`。无需安装 Python；双击打开 GUI，也可从命令行使用。
+从 [GitHub Releases](https://github.com/mikeywww/HDLConvert/releases/latest) 下载 `HDLConvert.exe`。无需安装 Python；双击打开 GUI，也可从命令行使用。
 
 ```powershell
-.\HDLConverter.exe design.vhd --target systemverilog
-.\HDLConverter.exe design.sv --target vhdl
-.\HDLConverter.exe design.v --target systemverilog -o design.sv
-.\HDLConverter.exe --gui
+.\HDLConvert.exe design.vhd --target systemverilog
+.\HDLConvert.exe design.sv --target vhdl
+.\HDLConvert.exe design.v --target systemverilog -o design.sv
+.\HDLConvert.exe --gui
 ```
 
 Windows x64 发布版目标小于 20 MB。双击 EXE 只显示中文软件窗口，并直接关闭程序自建的终端窗口；从现有终端调用 CLI 时仍保留输出。程序为单文件，启动时会把 Python/Tcl/Tk/tkdnd 运行库解压到用户临时目录，退出后清理。当前 EXE 未进行 Authenticode 签名。
@@ -28,7 +28,7 @@ Windows x64 发布版目标小于 20 MB。双击 EXE 只显示中文软件窗口
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-python vhdl2sv.py --gui
+python hdlconvert.py --gui
 ```
 
 ## GUI
@@ -45,12 +45,12 @@ GUI 使用 tkinter/ttk，保持 Windows 10 原生桌面工具风格，界面文�
 ## CLI
 
 ```powershell
-python vhdl2sv.py input.vhd --target verilog
-python vhdl2sv.py input.vhdl --target systemverilog -o output.sv
-python vhdl2sv.py input.v --target vhdl
-python vhdl2sv.py input.sv --target verilog
-python vhdl2sv.py a.v b.sv --target vhdl --output-dir converted
-python vhdl2sv.py input.vhd --target systemverilog --output-encoding utf-8
+python hdlconvert.py input.vhd --target verilog
+python hdlconvert.py input.vhdl --target systemverilog -o output.sv
+python hdlconvert.py input.v --target vhdl
+python hdlconvert.py input.sv --target verilog
+python hdlconvert.py a.v b.sv --target vhdl --output-dir converted
+python hdlconvert.py input.vhd --target systemverilog --output-encoding utf-8
 ```
 
 `--source auto` 默认按扩展名识别，也可显式选择 `vhdl`、`verilog` 或 `systemverilog`。输出后缀由 `--target` 决定：`.vhd`、`.v` 或 `.sv`。已有目标文件仅在完整转换成功后原子替换；错误或 `--strict` 警告不会破坏旧文件。
@@ -60,8 +60,8 @@ python vhdl2sv.py input.vhd --target systemverilog --output-encoding utf-8
 VHDL→SystemVerilog 的成熟路径仍支持：
 
 ```powershell
-python vhdl2sv.py design.vhd --target systemverilog --top demo --architecture rtl -g WIDTH=32
-python vhdl2sv.py design.vhd --target systemverilog --dependency types.vhd --strict
+python hdlconvert.py design.vhd --target systemverilog --top demo --architecture rtl -g WIDTH=32
+python hdlconvert.py design.vhd --target systemverilog --dependency types.vhd --strict
 ```
 
 `--dependency` 目前只用于 VHDL→SystemVerilog package 元数据。日志等级为 INFO、WARNING、ERROR；退出码 0 表示全部成功，1 表示至少一个文件失败，2 表示 CLI 参数错误。
@@ -125,4 +125,4 @@ python scripts/validate_numeric.py
 python scripts/verify_release.py
 ```
 
-构建产物为 `dist/HDLConverter.exe`，第三方许可内嵌，可用 `--licenses` 查看。开发参考 HDLconv 和 hdlConvertor 的工程分层思想；实现代码独立编写，`reference/` 不进入发布物。详细测试记录见 [VALIDATION.md](VALIDATION.md)，发布信息见 [RELEASE.md](RELEASE.md)。
+构建产物为 `dist/HDLConvert.exe`，第三方许可内嵌，可用 `--licenses` 查看。开发参考 HDLconv 和 hdlConvertor 的工程分层思想；实现代码独立编写，`reference/` 不进入发布物。详细测试记录见 [VALIDATION.md](VALIDATION.md)，发布信息见 [RELEASE.md](RELEASE.md)。

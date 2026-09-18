@@ -4,7 +4,7 @@ import logging
 import sys
 import ctypes
 from pathlib import Path
-from vhdl2sv.converter import convert_file
+from hdlconvert.converter import convert_file
 
 
 def close_private_gui_console():
@@ -21,8 +21,8 @@ def close_private_gui_console():
 def main(argv=None):
     if argv is None and getattr(sys, 'frozen', False) and len(sys.argv) == 1:
         argv = ['--gui']
-    parser = argparse.ArgumentParser(description='Lightweight HDL Converter: VHDL / Verilog / SystemVerilog')
-    parser.add_argument('--version', action='version', version='HDL Converter 2.0.1')
+    parser = argparse.ArgumentParser(description='HDLConvert: VHDL / Verilog / SystemVerilog')
+    parser.add_argument('--version', action='version', version='HDLConvert 2.0.1')
     parser.add_argument('--licenses', action='store_true', help='show bundled third-party notices')
     parser.add_argument('--self-test', type=Path, metavar='DIRECTORY', help='test bundled GUI/DnD and conversion in a temporary subdirectory')
     parser.add_argument('inputs', nargs='*', type=Path)
@@ -43,7 +43,7 @@ def main(argv=None):
         print((Path(__file__).resolve().parent / 'THIRD_PARTY_LICENSES.txt').read_text(encoding='utf-8'))
         return 0
     if args.self_test:
-        from vhdl2sv.release_check import run
+        from hdlconvert.release_check import run
         run(args.self_test)
         return 0
     if args.gui:

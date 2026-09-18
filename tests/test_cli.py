@@ -3,7 +3,7 @@ import sys
 import tempfile
 from pathlib import Path
 import unittest
-from vhdl2sv.converter import convert_file
+from hdlconvert.converter import convert_file
 from tests.test_conversion import unit
 
 
@@ -12,7 +12,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir='.') as directory:
             source = Path(directory)/'UPPER.VHDL'
             source.write_text('entity test is generic(W:integer:=8);port(q:out std_logic_vector(W-1 downto 0));end;architecture rtl of test is begin q<=(others=>\'0\');end;')
-            result = subprocess.run([sys.executable, 'vhdl2sv.py', str(source), '-g', 'W=16'], capture_output=True, text=True)
+            result = subprocess.run([sys.executable, 'hdlconvert.py', str(source), '-g', 'W=16'], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('parameter int w = 16', source.with_suffix('.sv').read_text())
 
@@ -21,7 +21,7 @@ class CliTests(unittest.TestCase):
             d = Path(directory)
             (d/'good.vhd').write_text(unit(body='q<=d;'))
             (d/'bad.vhd').write_text('entity bad')
-            result = subprocess.run([sys.executable, 'vhdl2sv.py', str(d/'bad.vhd'), str(d/'good.vhd')], capture_output=True, text=True)
+            result = subprocess.run([sys.executable, 'hdlconvert.py', str(d/'bad.vhd'), str(d/'good.vhd')], capture_output=True, text=True)
             self.assertEqual(result.returncode, 1)
             self.assertTrue((d/'good.sv').exists())
 
@@ -41,7 +41,7 @@ class CliTests(unittest.TestCase):
             d = Path(directory)
             (d/'a.vhd').write_text(unit(body='q<=d;'))
             (d/'a.vhdl').write_text(unit(body='q<=rst;'))
-            result = subprocess.run([sys.executable, 'vhdl2sv.py', str(d/'a.vhd'), str(d/'a.vhdl')], capture_output=True, text=True)
+            result = subprocess.run([sys.executable, 'hdlconvert.py', str(d/'a.vhd'), str(d/'a.vhdl')], capture_output=True, text=True)
             self.assertEqual(result.returncode, 1)
             self.assertIn('assign q = d', (d/'a.sv').read_text())
 

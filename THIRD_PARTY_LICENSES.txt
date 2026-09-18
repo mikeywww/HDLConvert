@@ -1,4 +1,4 @@
-VHDL2SV 1.0.0 - bundled third-party notices
+HDLConvert 2.0.1 - bundled third-party notices
 Runtime redistribution notices; reference repositories are NOT bundled.
 
 

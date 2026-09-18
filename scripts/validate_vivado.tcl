@@ -11,4 +11,4 @@ foreach {top source} {counter reference_counter.sv rtl_demo rtl_demo.sv} {
     write_checkpoint -force ${top}.dcp
     close_project
 }
-puts "VHDL2SV_VIVADO_SYNTHESIS_PASS"
+puts "HDLCONVERT_VIVADO_SYNTHESIS_PASS"

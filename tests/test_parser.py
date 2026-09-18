@@ -1,8 +1,8 @@
 import unittest
-from vhdl2sv.parser import Parser
-from vhdl2sv.lexer import tokenize, ParseError
-from vhdl2sv.expressions import Expressions
-from vhdl2sv.symbols import Symbols, TypeInfo
+from hdlconvert.parser import Parser
+from hdlconvert.lexer import tokenize, ParseError
+from hdlconvert.expressions import Expressions
+from hdlconvert.symbols import Symbols, TypeInfo
 
 
 class ParserTests(unittest.TestCase):

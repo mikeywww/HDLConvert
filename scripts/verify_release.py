@@ -18,8 +18,8 @@ def main():
     log = []
     with tempfile.TemporaryDirectory(dir=scratch, prefix='独立目录 ') as directory:
         folder = Path(directory)
-        exe = folder/'HDLConverter.exe'
-        shutil.copy2(ROOT/'dist'/'HDLConverter.exe', exe)
+        exe = folder/'HDLConvert.exe'
+        shutil.copy2(ROOT/'dist'/'HDLConvert.exe', exe)
 
         def run(args, expected=0):
             result = subprocess.run([str(exe), *map(str, args)], cwd=folder,

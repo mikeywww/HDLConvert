@@ -15,7 +15,7 @@ def main():
     root=TkinterDnD.Tk();root.withdraw()
     try:
         app=EditorApp(root,DND_FILES);root.update()
-        assert root.title()=='HDL 转换工具'
+        assert root.title()=='HDLConvert'
         assert app.output_encoding.get()=='GB2312'
         app.drop(SimpleNamespace(data=root.tk.call('list',str(path))))
         assert app.source_language.get()=='SystemVerilog'

@@ -1,6 +1,6 @@
 """Verilog-family tokens and Pratt expressions, with source locations."""
 import re
-from vhdl2sv.lexer import Token, ParseError
+from hdlconvert.lexer import Token, ParseError
 from .ir import Expr
 
 PATTERN = re.compile(r'''(?P<space>\s+)|(?P<comment>//[^\n]*|/\*[\s\S]*?\*/)|(?P<number>(?:\d[\d_]*)?'[sS]?[bBoOdDhH][0-9a-fA-F_xXzZ?]+|'[01xXzZ]|\d[\d_]*)|(?P<id>\\[^\s]+|[$a-zA-Z_][$\w]*)|(?P<string>"(?:\\.|[^"\\])*")|(?P<op>===|!==|>>>|<<<|<<|>>|<=|>=|==|!=|&&|\|\||\*\*|~\^|\^~|~&|~\||\+\+|--|\+=|-=|::|[(){}\[\],;:.?@#=+*/%<>|&^~!\-'])''')

@@ -37,7 +37,7 @@ class SharedParser(unittest.TestCase):
         self.assertEqual(m.ports[1].direction,'output')
     def test_fail_closed(self):
         from hdl.parser import Parser
-        from vhdl2sv.lexer import ParseError
+        from hdlconvert.lexer import ParseError
         for source in ('module m(); initial #10 x=1; endmodule','`define W 8\nmodule m(); endmodule'):
             with self.assertRaises(ParseError): Parser(source).parse()
 

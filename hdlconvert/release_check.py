@@ -14,7 +14,7 @@ def run(directory):
     root.withdraw()
     try:
         app = EditorApp(root, DND_FILES)
-        if root.title() != 'HDL 转换工具' or app.output_encoding.get() != 'GB2312':
+        if root.title() != 'HDLConvert' or app.output_encoding.get() != 'GB2312':
             raise RuntimeError('Chinese GUI/default output encoding failed')
         with tempfile.TemporaryDirectory(dir=directory, prefix='release-check-') as scratch:
             source = Path(scratch)/'中文 input.sv'

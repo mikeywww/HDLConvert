@@ -1,11 +1,11 @@
-"""Tk UI only: all conversion goes through vhdl2sv.converter."""
+"""Tk UI only: all conversion goes through hdlconvert.converter."""
 from pathlib import Path
 import queue
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog
 from tkinter.scrolledtext import ScrolledText
-from vhdl2sv.converter import convert_file
+from hdlconvert.converter import convert_file
 
 
 class FileQueue:

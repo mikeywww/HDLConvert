@@ -1,6 +1,6 @@
-# HDL Converter 2.0.1 local candidate — Windows x64
+# HDLConvert 2.0.1 local candidate — Windows x64
 
-本地候选文件：`dist/HDLConverter.exe`。尚未上传 GitHub 或创建 Release；必须先取得用户明确许可。这一个文件同时提供 GUI 和 CLI，无需安装 Python 或复制 DLL 目录。
+本地候选文件：`dist/HDLConvert.exe`。尚未创建 2.0.1 Release；必须先取得用户明确许可。这一个文件同时提供 GUI 和 CLI，无需安装 Python 或复制 DLL 目录。
 
 - 文件大小：**9,767,655 字节**（9.77 MB / 9.31 MiB），低于 20 MB 目标。
 - SHA-256：`2fa3a3d738307f46b5602d4a1d7f8bd3c3181513d21684d2648ec77757824b5e`
@@ -13,14 +13,14 @@
 双击 EXE 打开中文 Win10 风格 HDL 编辑器，程序通过 `FreeConsole` 关闭其自建终端，只保留应用窗口。命令行示例：
 
 ```powershell
-.\HDLConverter.exe design.vhd --target systemverilog
-.\HDLConverter.exe design.vhd --target verilog
-.\HDLConverter.exe design.v --target vhdl
-.\HDLConverter.exe design.v --target systemverilog
-.\HDLConverter.exe design.sv --target vhdl
-.\HDLConverter.exe design.sv --target verilog
-.\HDLConverter.exe --gui
-.\HDLConverter.exe --licenses
+.\HDLConvert.exe design.vhd --target systemverilog
+.\HDLConvert.exe design.vhd --target verilog
+.\HDLConvert.exe design.v --target vhdl
+.\HDLConvert.exe design.v --target systemverilog
+.\HDLConvert.exe design.sv --target vhdl
+.\HDLConvert.exe design.sv --target verilog
+.\HDLConvert.exe --gui
+.\HDLConvert.exe --licenses
 ```
 
 ## 发布验证
