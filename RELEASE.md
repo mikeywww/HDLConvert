@@ -6,7 +6,7 @@
 - SHA-256：`234a11dde26cca2a072b177dfcab4090e191a63e84f2adf7f82d540d65e52cc4`
 - Windows 文件版本 / 产品版本：1.0.0。
 - 平台：Windows x64；本次验证环境 Windows 11 x64。没有声称已完成所有 Windows 版本或干净虚拟机验收。
-- 签名状态：未进行 Authenticode 签名。未提供发布者签名证书，未自动购买证书或上传应用。
+- 签名状态：未进行 Authenticode 签名。未提供发布者签名证书。
 
 ## 使用
 

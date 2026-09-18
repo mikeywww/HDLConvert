@@ -8,7 +8,7 @@
 
 ### 单文件发布版（推荐给最终用户）
 
-只需复制 `dist/VHDL2SV.exe`，无需安装 Python 或 tkinterdnd2。双击默认打开拖放 GUI；也支持：
+从 [GitHub Releases](https://github.com/mikeywww/VHDL2SV/releases/latest) 下载 `VHDL2SV.exe`。只需这一个文件，无需安装 Python 或 tkinterdnd2。双击默认打开拖放 GUI；也支持：
 
 ```powershell
 .\VHDL2SV.exe input.vhd -o output.sv
