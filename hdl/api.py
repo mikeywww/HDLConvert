@@ -34,7 +34,7 @@ def detect_language(source='',path=None):
     known={'.vhd':'vhdl','.vhdl':'vhdl','.v':'verilog','.sv':'systemverilog'}
     if suffix in known:return known[suffix]
     stripped=re.sub(r'//[^\n]*|/\*[\s\S]*?\*/|--[^\n]*','',source)
-    if re.search(r'\b(entity|architecture|std_logic)\b',stripped,re.I):return 'vhdl'
+    if re.search(r'\b(entity|architecture|std_logic|process)\b',stripped,re.I):return 'vhdl'
     if re.search(r'\b(logic|always_ff|always_comb|typedef)\b',stripped):return 'systemverilog'
     if re.search(r'\bmodule\b',stripped):return 'verilog'
     raise ValueError('Cannot identify HDL language; select Source manually')
@@ -45,26 +45,84 @@ def comment_draft(source,target,message):
     return prefix+' WARNING / TODO: '+message+'\n'+prefix+' No complete target design emitted. Original source follows.\n'+'\n'.join(prefix+' '+line for line in source.splitlines())+'\n'
 
 
+def process_fragment(source):
+    """Wrap one standalone process for the normal VHDL conversion pipeline.
+
+    Undeclared identifiers are temporary scalar symbols for parsing only; no
+    declarations are emitted in the resulting pasteable HDL fragment.
+    """
+    parser=VHDLParser(source)
+    tokens=parser.tokens
+    if not tokens or not (tokens[0].lower=='process' or len(tokens)>2 and tokens[1].text==':' and tokens[2].lower=='process'):
+        return None
+    nodes=parser.statements(concurrent=True)
+    if parser.peek() or len(nodes)!=1 or nodes[0].kind!='process':
+        raise ParseError('fragment must contain exactly one complete process')
+    reserved=set('process is begin end if then elsif else case when others for in to downto loop'
+                 ' all not and or xor nand nor xnor mod rem sll srl rising_edge falling_edge'
+                 ' true false null return signal variable constant out inout open event'
+                 ' std_logic std_logic_vector std_ulogic signed unsigned integer natural positive boolean'
+                 ' to_integer to_unsigned to_signed resize'.split())
+    local={d.name.lower() for d in nodes[0].data['decl']}
+    local.add(nodes[0].name.lower())
+    def loop_names(statements):
+        for n in statements:
+            if n.kind in ('for','generate') and 'variable' in n.data:local.add(n.data['variable'].lower())
+            loop_names(n.children)
+            for _,body in n.data.get('branches',[]):loop_names(body)
+            loop_names(n.data.get('else',[]))
+            for _,body in n.data.get('choices',[]):loop_names(body)
+    loop_names(nodes[0].children)
+    names=sorted({t.lower for t in tokens if t.text.isidentifier() and t.lower not in reserved and t.lower not in local})
+    for i,t in enumerate(tokens[:-1]):
+        if t.lower in names and tokens[i+1].text=='(':
+            raise ParseError(f'line {t.line}: fragment index/function width is unknown; include entity and declarations')
+    if any(t.lower=='others' for t in tokens):
+        raise ParseError('fragment aggregate width is unknown; include entity and declarations')
+    declarations=''.join(f'signal {name}: std_logic;\n' for name in names)
+    wrapped='entity hdl_fragment_temp is end entity;\narchitecture rtl of hdl_fragment_temp is\n'+declarations+'begin\n'+source+'\nend architecture;'
+    return wrapped,names
+
+
+def extract_process_fragment(output):
+    lines=output.splitlines()
+    start=next((i for i,line in enumerate(lines) if re.match(r'\s*always(?:_ff|_comb|_latch)?\b',line)),None)
+    end=next((i for i,line in enumerate(lines) if line.strip()=='endmodule'),None)
+    if start is None or end is None or end<=start:raise ParseError('converted fragment has no process body')
+    return '\n'.join(line[4:] if line.startswith('    ') else line for line in lines[start:end])+'\n'
+
+
 def convert_text(source, *, source_language=None, target_language='systemverilog', top=None, architecture=None, generics=None):
     src=language(source_language) if source_language else detect_language(source)
     dst=language(target_language)
     diagnostics=[]
     try:
         if src=='vhdl':
+            fragment=process_fragment(source)
+            if fragment:
+                source,assumed=fragment
+                diagnostics.append(Diagnostic(1,'standalone process: surrounding signal widths and declarations must match the insertion scope'))
             design=VHDLParser(source).parse()
             diagnostics+=analyze(design)
             generator=LegacyGenerator(top,architecture,{k.lower():vhdl_tokens(str(v)) for k,v in (generics or {}).items()})
             normalized=generator.generate(design)
-            diagnostics+=generator.diagnostics
+            if dst=='systemverilog':
+                omitted={d.message.rsplit(' ',1)[-1] for d in generator.diagnostics if d.message.startswith('declaration initializer omitted for child output ')}
+                diagnostics=[d for d in diagnostics if not any(d.message.startswith(f'declaration initialization preserved: {name};') for name in omitted)]
+                diagnostics+=generator.diagnostics
             # Invalid initializers are never silently replaced by truncation.
             invalid=[d.data['invalid_initializer_source'] for u in design.units for d in u.data.get('decl',[]) if d.data.get('invalid_initializer_source')]
             if invalid:
                 normalized='\n'.join('// TODO: Invalid declaration initializer: '+s.replace('\n','\n// ') for s in invalid)+'\n'+normalized
             if dst=='systemverilog':
+                if fragment:normalized=extract_process_fragment(normalized)
                 return ConversionResult(normalized,diagnostics)
             if dst=='vhdl':raise ParseError('same-language VHDL formatting is not a conversion direction')
             from .vhdl_adapter import VHDLAdapter
             neutral=VHDLAdapter(top,architecture,{k.lower():vhdl_tokens(str(v)) for k,v in (generics or {}).items()}).convert(design)
+            omitted={d.message.rsplit(' ',1)[-1] for d in neutral.diagnostics if d.message.startswith('declaration initializer omitted for child output ')}
+            diagnostics=[d for d in diagnostics if not any(d.message.startswith(f'declaration initialization preserved: {name};') for name in omitted)]
+            diagnostics+=neutral.diagnostics
         else:
             if architecture or generics:raise ParseError('architecture/generic overrides apply only to VHDL input')
             neutral=Parser(source,src).parse()
@@ -82,7 +140,8 @@ def convert_text(source, *, source_language=None, target_language='systemverilog
                     elif n.kind=='assignment' and n.data['concurrent']:continuous.add(root_name(n.data['target']))
                 if any(count>1 or name in continuous for name,count in owners.items()):raise ParseError('multiple or mixed process drivers require manual ownership review')
         output=VHDLGenerator().generate(neutral) if dst=='vhdl' else VerilogGenerator(dst).generate(neutral)
-        inline_diagnostics=[d for d in diagnostics if 'declaration initialization preserved:' not in d.message]
+        if src=='vhdl' and fragment:output=extract_process_fragment(output)
+        inline_diagnostics=[d for d in diagnostics if 'declaration initialization preserved:' not in d.message and 'declaration initializer omitted for child output' not in d.message]
         if inline_diagnostics:
             prefix='--' if dst=='vhdl' else '//'
             output='\n'.join(prefix+' WARNING / TODO: '+str(d) for d in inline_diagnostics)+'\n'+output

@@ -115,13 +115,17 @@ class ExprParser:
         elif re.fullmatch(r"'[01xXzZ-]'", t.text):
             value = "1'b" + ('x' if t.text[1] == '-' else t.text[1].lower())
             meta = ('bits', '1')
-        elif re.fullmatch(r'[xXbBoO]?"[0-9a-fA-FxXzZ_\-]+"', t.text):
+        elif re.fullmatch(r'[xXbBoO]?"[0-9a-fA-FxXzZ_\-]+"', t.text) or re.fullmatch(r"[xXbBoO]'[0-9a-fA-F_]+'", t.text):
             prefix = t.text[0].lower() if t.text[0] != '"' else 'b'
-            digits = t.text[t.text.index('"')+1:-1].replace('_', '').replace('-', 'x')
+            digits = t.text[2:-1].replace('_', '').replace('-', 'x') if t.text[0]!='"' else t.text[1:-1].replace('_', '').replace('-', 'x')
             valid = {'b': r'[01xzXZ]+', 'x': r'[0-9a-fA-FxzXZ]+', 'o': r'[0-7xzXZ]+'}
             if not re.fullmatch(valid[prefix], digits):
                 raise ParseError('invalid bit string literal')
-            value = f"{len(digits)*{'b':1,'x':4,'o':3}[prefix]}'{'h' if prefix == 'x' else prefix}{digits}"
+            width = len(digits)*{'b':1,'x':4,'o':3}[prefix]
+            # Sized literals retain their VHDL width even when leading zero
+            # digits are removed for a compact Verilog representation.
+            display = (digits.lstrip('0') or '0') if prefix == 'x' and re.fullmatch(r'[0-9a-fA-F]+', digits) else digits
+            value = f"{width}'{'h' if prefix == 'x' else prefix}{display}"
             meta = ('bits', str(len(digits)*{'b':1,'x':4,'o':3}[prefix]))
         elif n in ('true', 'false'):
             value = "1'b1" if n == 'true' else "1'b0"

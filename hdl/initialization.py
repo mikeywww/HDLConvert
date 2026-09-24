@@ -24,7 +24,7 @@ def literal_width(tokens):
     if len(tokens)!=1: return None
     s=tokens[0].text
     if re.fullmatch("'[01]'",s): return 1
-    m=re.fullmatch(r'([xXbBoO]?)"([0-9a-fA-F_]+)"',s)
+    m=re.fullmatch(r'([xXbBoO]?)["\']([0-9a-fA-F_]+)["\']',s)
     if m:return len(m[2].replace('_',''))*{'':1,'b':1,'x':4,'o':3}[m[1].lower()]
     return None
 

@@ -8,6 +8,7 @@ import re
 from hdlconvert.generator import Generator
 from hdlconvert.symbols import Symbols, TypeInfo
 from hdlconvert.ast import Node
+from hdlconvert.ast import Diagnostic
 from hdlconvert.lexer import ParseError, words, split as v_split
 from hdlconvert.drivers import combinational_targets, redundant_variable_initializers
 from .ir import Design, Module, Declaration, Statement, Type, Expr
@@ -17,7 +18,7 @@ from .lex import expression, tokenize
 
 class VHDLAdapter:
     def __init__(self,top=None,architecture=None,generics=None):
-        self.g=Generator(top,architecture,generics);self.enums={};self.types={};self.functions=[];self.nt_symbols={}
+        self.g=Generator(top,architecture,generics);self.enums={};self.types={};self.functions=[];self.nt_symbols={};self.interfaces={}
     def expr(self,tokens):return expression(tokenize(self.g.expr(tokens)))
     def neutral_type(self,ref):
         name=ref.name.lower()
@@ -91,11 +92,13 @@ class VHDLAdapter:
     def convert(self,design):
         neutral=Design(source_language='vhdl')
         entities=[u for u in design.units if u.kind=='entity' and (not self.g.top or u.name.lower()==self.g.top.lower())]
+        entity_interfaces={u.name.lower():[(p.name.lower(),p.data.get('direction','in')) for p in u.children if p.kind=='port'] for u in design.units if u.kind=='entity'}
         if any(u.kind not in ('entity','architecture') for u in design.units):raise ParseError('packages/import units require additional neutral lowering')
         for entity in entities:
             arches=[u for u in design.units if u.kind=='architecture' and u.data['entity'].lower()==entity.name.lower() and (not self.g.architecture or u.name.lower()==self.g.architecture.lower())]
             if len(arches)!=1:raise ParseError('select one architecture')
-            a=arches[0];self.g.symbols=Symbols();self.enums={};self.types={};self.functions=[];self.nt_symbols={}
+            a=arches[0];self.g.symbols=Symbols();self.enums={};self.types={};self.functions=[];self.nt_symbols={};self.interfaces=dict(entity_interfaces)
+            self.interfaces.update({d.name.lower():[(p.name.lower(),p.data.get('direction','in')) for p in d.children if p.kind=='port'] for d in a.data['decl'] if d.kind=='component'})
             if entity.data['imports'] or a.data['imports']:raise ParseError('package metadata requires legacy VHDL-to-SV path')
             m=Module(entity.name.lower(),source=entity.source+'\n'+a.source,line=entity.line)
             for n in entity.children:
@@ -110,9 +113,24 @@ class VHDLAdapter:
                 d=self.declaration(n)
                 if d:m.declarations.append(d)
             m.enums=dict(self.enums);m.functions=list(self.functions);m.statements=self.statements(a.children,'concurrent')
+            child_outputs={name for statement in self._walk(m.statements) if statement.kind=='instance' for name in statement.data['output_targets']}
+            for d in m.declarations:
+                if d.name.lower() in child_outputs and d.value is not None:
+                    # A child output already drives this net. An initializer would
+                    # become a second Verilog driver (and is not a VHDL reset).
+                    d.value=None
+                    neutral.diagnostics.append(Diagnostic(d.line,f'declaration initializer omitted for child output {d.name}'))
             neutral.modules.append(m)
         if not neutral.modules:raise ParseError('no selected entity')
         return neutral
+    @staticmethod
+    def _walk(statements):
+        for statement in statements:
+            yield statement
+            yield from VHDLAdapter._walk(statement.body)
+            yield from VHDLAdapter._walk(statement.data.get('otherwise',[]))
+            for _,body in statement.data.get('choices',[]):
+                yield from VHDLAdapter._walk(body)
     def statements(self,nodes,context):
         out=[]
         for n in nodes:
@@ -157,7 +175,7 @@ class VHDLAdapter:
                 # Explicit region is required by Verilog-2001.
                 if gen:s=Statement('generate',body=[s])
             elif k=='instance':
-                ts=d['tokens'];i=1 if ts[0].lower=='entity' else 0
+                ts=d['tokens'];i=1 if ts[0].lower in ('entity','component') else 0
                 if i+1<len(ts) and ts[i+1].text=='.':
                     if ts[i].lower!='work':raise ParseError('only work entity binding supported')
                     i+=2
@@ -174,7 +192,25 @@ class VHDLAdapter:
                         name=pair[0][0].text.lower() if len(pair)==2 else ''
                         value=pair[-1]
                         maps[key].append((name,None if words(value).lower()=='open' else self.expr(value)))
-                s=Statement('instance',dict(module=module,name=n.name,**maps))
+                signature=self.interfaces.get(module)
+                outputs=[]
+                if signature is None and any(actual is not None for _,actual in maps['ports']):
+                    raise ParseError(f'line {n.line}: port directions unavailable for {module}; include its component/entity declaration')
+                if signature is not None:
+                    directions=dict(signature)
+                    for position,(formal,actual) in enumerate(maps['ports']):
+                        if formal:
+                            if formal not in directions:raise ParseError(f'line {n.line}: unknown port {formal} on {module}')
+                            direction=directions[formal]
+                        else:
+                            if position>=len(signature):raise ParseError(f'line {n.line}: too many ports on {module}')
+                            direction=signature[position][1]
+                        if direction in ('out','inout','buffer') and actual is not None:
+                            from .verilog import root_name
+                            if actual.kind not in ('name','index','slice','field') or not root_name(actual):
+                                raise ParseError(f'line {n.line}: child output requires a signal target')
+                            outputs.append(root_name(actual))
+                s=Statement('instance',dict(module=module,name=n.name,output_targets=outputs,**maps))
             else:raise ParseError(f'line {n.line}: unsupported neutral statement {k}')
             s.line=n.line;s.source=n.source;s.label=n.name;out.append(s)
         return out

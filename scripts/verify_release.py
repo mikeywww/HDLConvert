@@ -30,7 +30,7 @@ def main():
                 raise RuntimeError(log[-1])
             return result
 
-        if '2.0.2' not in run(['--version']).stdout:
+        if '2.0.3' not in run(['--version']).stdout:
             raise RuntimeError('version missing')
         if 'MIT License' not in run(['--licenses']).stdout:
             raise RuntimeError('notices missing')
@@ -58,6 +58,21 @@ def main():
         ddr3_text = ddr3_out.read_text(encoding='gb2312')
         if 'module ddr3_controller_500' not in ddr3_text or 'request_q[143:16]' not in ddr3_text:
             raise RuntimeError('DDR3 VHDL-to-Verilog structured lowering failed')
+        parent = folder/'parent.vhd'
+        parent.write_text('''entity parent is port(y:out std_logic);end;
+architecture rtl of parent is component child is port(q:out std_logic);end component;
+signal q:std_logic:='0';begin u:child port map(q=>q);y<=q;end;''', encoding='utf-8')
+        parent_out = folder/'parent.v'
+        run([parent,'-o',parent_out])
+        parent_text = parent_out.read_text(encoding='gb2312')
+        if 'wire q;' not in parent_text or "wire q = 1'b0" in parent_text:
+            raise RuntimeError('child output ownership regression')
+        fragment = folder/'fragment.vhd'
+        fragment.write_text("process(clk) begin if rising_edge(clk) then q<='1';end if;end process;", encoding='utf-8')
+        fragment_out = folder/'fragment.v'
+        run([fragment,'-o',fragment_out])
+        if 'always @(posedge clk)' not in fragment_out.read_text(encoding='gb2312'):
+            raise RuntimeError('process fragment regression')
         bad = folder/'bad.sv'
         bad.write_text('module broken(); initial #1 $finish; endmodule', encoding='utf-8')
         preserved = folder/'bad.vhd'
@@ -66,7 +81,7 @@ def main():
         if preserved.read_text(encoding='utf-8') != 'keep':
             raise RuntimeError('failed conversion overwrote output')
     (ROOT/'build'/'release-verification.log').write_text('\n'.join(log), encoding='utf-8')
-    print('PASS: isolated EXE version/licenses, native editor/DnD, GBK input, Unicode path, legacy golden output, DDR3 VHDL-to-Verilog, new directions and failure preservation')
+    print('PASS: isolated EXE version/licenses, native editor/DnD, GBK input, Unicode path, legacy golden output, DDR3 and child-output VHDL-to-Verilog, process fragment, new directions and failure preservation')
 
 
 if __name__ == '__main__':

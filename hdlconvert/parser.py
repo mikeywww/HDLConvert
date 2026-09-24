@@ -180,9 +180,14 @@ class Parser:
             elif tag == 'component':
                 self.pop()
                 name = self.pop().text
-                self.until('end')
+                self.accept('is')
+                interface = []
+                while self.peek() in ('generic', 'port'):
+                    kind = self.pop().lower
+                    interface.extend(self.interface(kind, self.parens()))
+                    self.pop(';')
                 self.finish('component', name)
-                out.append(self.node('component', start, name))
+                out.append(self.node('component', start, name, children=interface))
             else:
                 self.until(';')
                 self.pop(';')

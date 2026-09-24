@@ -109,6 +109,14 @@ Many rejected inputs are intentionally incomplete entity-only/architecture-only 
 
 Both reference Git worktrees remained clean. Their code was not copied into the converter implementation.
 
+## VHDL child-port and literal regression (local 2.0.3 candidate)
+
+An external example was fetched for read-only testing from [Parin810's `avalon_interface.vhd`](https://github.com/Parin810/Wavelets-VLSI-Design-/blob/master/1d_wavelet_transform/quartus_demo/avalon_interface.vhd). It contains a component declaration, positional map to child outputs, initialized parent signals and `x"0000"` concatenation. The original was kept only under ignored `build/external/`, not vendored. Direct CLI conversion with `-o build/external/avalon_interface_direct.v` succeeded; the four child-driven signals became uninitialized `wire`, and the literal became `16'h0`. Both generated Verilog-2005 and SystemVerilog-2012 passed Icarus parse/elaboration with a minimal locally written child stub. The source does not connect its final `ready` output; the stub check verifies emitted syntax and binding, not functional equivalence of the third-party project.
+
+The local regression suite passed 81 tests in one run, and the nine focused child-output/literal/fragment cases passed after the final ownership changes. These tests include named/positional maps, direct parent output connection, unknown-interface rejection, a standalone process and `x'0001aa'` width preservation.
+
+The 2.0.3 one-file Windows candidate built successfully at `dist/HDLConvert.exe` (9,780,866 bytes, SHA256 `5253181c3f104d375a1b8c3f7b083f59fed77d1cf153cc20965c04c1bc4b03c4`). One isolated `scripts/verify_release.py` run passed: previous GUI/DnD, GBK, DDR3 and failure-preservation checks plus new child-output and process-fragment EXE checks. This candidate has not been pushed or published.
+
 ## Limits of acceptance
 
 HDLConvert 2.0.2 publication check (2026-09-19): the targeted DDR3 VHDL-to-Verilog regression passed, generated Verilog passed Icarus Verilog-2005 parse/elaboration, and the final frozen EXE passed one isolated verification including the DDR3 conversion. Artifact: 9,770,726 bytes; SHA256 `a10d782a233f9332d5e3d7d33aedf10317e1163065d6162b77b58fae317b6496`. The matching artifact was published at GitHub Release v2.0.2.

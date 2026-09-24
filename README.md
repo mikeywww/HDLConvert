@@ -46,6 +46,7 @@ GUI 使用 tkinter/ttk，保持 Windows 10 原生桌面工具风格，界面文�
 
 ```powershell
 python hdlconvert.py input.vhd --target verilog
+python hdlconvert.py input.vhd -o input.v
 python hdlconvert.py input.vhdl --target systemverilog -o output.sv
 python hdlconvert.py input.v --target vhdl
 python hdlconvert.py input.sv --target verilog
@@ -53,7 +54,7 @@ python hdlconvert.py a.v b.sv --target vhdl --output-dir converted
 python hdlconvert.py input.vhd --target systemverilog --output-encoding utf-8
 ```
 
-`--source auto` 默认按扩展名识别，也可显式选择 `vhdl`、`verilog` 或 `systemverilog`。输出后缀由 `--target` 决定：`.vhd`、`.v` 或 `.sv`。已有目标文件仅在完整转换成功后原子替换；错误或 `--strict` 警告不会破坏旧文件。
+`--source auto` 默认按扩展名识别，也可显式选择 `vhdl`、`verilog` 或 `systemverilog`。使用 `-o` 时，`.v`、`.sv`、`.vhd` 后缀可自动决定目标语言；显式 `--target` 优先。未指定时默认输出 `.sv`。已有目标文件仅在完整转换成功后原子替换；错误或 `--strict` 警告不会破坏旧文件。
 
 输入文件支持 UTF-8（含 BOM）、GB2312 和 GBK。输出默认使用 GB2312，可通过 GUI 选择 GBK/UTF-8，或通过 CLI 的 `--output-encoding gb2312|gbk|utf-8` 指定。
 
@@ -80,6 +81,10 @@ python hdlconvert.py design.vhd --target systemverilog --dependency types.vhd --
 | FSM | VHDL enum；SV enum；Verilog localparam 降级 |
 | 运算 | 加减乘除、比较、逻辑、常用移位和已知位宽转换 |
 
+单独粘贴一个完整的 VHDL `process` 块也可转换为 `always` 代码段。代码段依赖粘贴位置已有的信号声明；无从推断索引/聚合位宽时会要求提供完整 entity/architecture。子模块端口方向可由同文件 entity 或 component 声明识别；连接子模块输出的父模块信号/输出端口生成为 `wire`，其声明初值会移除并在日志提示。缺少子模块接口信息时，VHDL→Verilog 拒绝猜测端口方向。
+
+VHDL `x"0001aa"` 转为保留原位宽的 `24'h1aa`；16 位全零初值使用 `16'h0`。也兼容 `x'0001aa'` 写法。`'0'`、`'1'` 仍按目标上下文转换为合适的常量。
+
 VHDL→SystemVerilog 还支持固定一/二维数组、非零/降序数组范围、整体数组循环复制、简单 package/function/record/subtype、numeric_std 常见转换和 selected assignment。新加入的 Verilog/SV→VHDL 与 VHDL→Verilog 路径范围更保守。
 
 ## 声明初值
@@ -89,6 +94,8 @@ VHDL 信号声明初值按三类处理：
 - `SAFE_REMOVE`：能证明整个组合信号被完整、非反馈地驱动，为避免初始化和逻辑驱动冲突而静默省略初值。
 - `PRESERVE`：代码读取或反馈依赖该值，保留上电初值。
 - `UNCERTAIN`：不能证明安全删除，优先保留并输出 warning。
+
+子模块输出端口连接的父模块声明不参与此保留规则：输出端口已经驱动该网络，声明初值将移除；日志会指出具体信号。若父模块还对同一信号赋值，转换拒绝生成多驱动结果。
 
 process 变量只有在每条可能读取路径上都先经过完整赋值时才静默省略声明初值；先读后写、分支漏赋值及部分赋值继续保留。reset 分支是 RTL 功能逻辑，绝不会作为声明初值被删除。静态可计算的位宽不匹配会报告，例如 4 bit 信号赋 12 bit `x"000"`，并拒绝生成猜测性的初始化。该分析不是完整的多驱动、锁存或形式等价证明。
 

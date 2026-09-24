@@ -19,7 +19,7 @@ class Token:
         return self.text.lower()
 
 
-PATTERN = re.compile(r'''(?P<space>\s+)|(?P<comment>--[^\n]*)|(?P<literal>[xXbBoO]"[^"]*"|"(?:[^"]|"")*"|'[^'\n]')|(?P<id>[a-zA-Z][a-zA-Z0-9_]*)|(?P<number>\d+(?:_\d+)*(?:\#[a-fA-F0-9_.]+\#)?(?:[eE][+-]?\d+)?)|(?P<op>:=|<=|>=|/=|=>|\*\*|<>|[()\[\],;:.&+*/=<>|'\-])''')
+PATTERN = re.compile(r'''(?P<space>\s+)|(?P<comment>--[^\n]*)|(?P<literal>[xXbBoO]"[^"]*"|[xXbBoO]'[0-9a-fA-F_]+'|"(?:[^"]|"")*"|'[^'\n]')|(?P<id>[a-zA-Z][a-zA-Z0-9_]*)|(?P<number>\d+(?:_\d+)*(?:\#[a-fA-F0-9_.]+\#)?(?:[eE][+-]?\d+)?)|(?P<op>:=|<=|>=|/=|=>|\*\*|<>|[()\[\],;:.&+*/=<>|'\-])''')
 
 
 def tokenize(text):

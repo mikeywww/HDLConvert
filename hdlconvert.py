@@ -39,15 +39,15 @@ def main(argv=None):
         attach_cli_streams()
     argv = raw_args
     parser = argparse.ArgumentParser(description='HDLConvert: VHDL / Verilog / SystemVerilog')
-    parser.add_argument('--version', action='version', version='HDLConvert 2.0.2')
+    parser.add_argument('--version', action='version', version='HDLConvert 2.0.3')
     parser.add_argument('--licenses', action='store_true', help='show bundled third-party notices')
     parser.add_argument('--self-test', type=Path, metavar='DIRECTORY', help='test bundled GUI/DnD and conversion in a temporary subdirectory')
     parser.add_argument('inputs', nargs='*', type=Path)
-    parser.add_argument('-o', '--output', type=Path, help='single output file; suffix must match --target')
+    parser.add_argument('-o', '--output', type=Path, help='single output file; .v/.sv/.vhd infers target when --target is omitted')
     parser.add_argument('--output-dir', type=Path)
     parser.add_argument('--gui', action='store_true')
     parser.add_argument('--source', choices=('auto','vhdl','verilog','systemverilog','sv'), default='auto')
-    parser.add_argument('--target', choices=('vhdl','verilog','systemverilog','sv'), default='systemverilog')
+    parser.add_argument('--target', choices=('vhdl','verilog','systemverilog','sv'))
     parser.add_argument('--output-encoding', choices=('gb2312','gbk','utf-8'), default='gb2312',
                         help='output file encoding (default: gb2312)')
     parser.add_argument('--top')
@@ -81,7 +81,8 @@ def main(argv=None):
     success = warned = failures = 0
     destinations = set()
     from hdl.api import convert_file as convert_hdl, language, SUFFIX
-    target = language(args.target)
+    inferred={'.v':'verilog','.sv':'systemverilog','.vhd':'vhdl','.vhdl':'vhdl'}
+    target = language(args.target or (inferred.get(args.output.suffix.lower()) if args.output else None) or 'systemverilog')
     suffix = SUFFIX[target]
     for source in dict.fromkeys(p.resolve() for p in args.inputs):
         output = args.output or ((args.output_dir / source.with_suffix(suffix).name) if args.output_dir else source.with_suffix(suffix))
