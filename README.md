@@ -81,11 +81,11 @@ python hdlconvert.py design.vhd --target systemverilog --dependency types.vhd --
 | FSM | VHDL enum；SV enum；Verilog localparam 降级 |
 | 运算 | 加减乘除、比较、逻辑、常用移位和已知位宽转换 |
 
-单独粘贴一个完整的 VHDL `process` 块也可转换为 `always` 代码段。代码段依赖粘贴位置已有的信号声明；无从推断索引/聚合位宽时会要求提供完整 entity/architecture。子模块端口方向可由同文件 entity 或 component 声明识别；连接子模块输出的父模块信号/输出端口生成为 `wire`，其声明初值会移除并在日志提示。缺少子模块接口信息时，VHDL→Verilog 拒绝猜测端口方向。
+单独粘贴一个完整的 VHDL `process` 块也可转换为 `always` 代码段。代码段依赖粘贴位置已有的信号声明；无从推断索引/聚合位宽时会要求提供完整 entity/architecture。子模块端口方向可由同文件 entity 或 component 声明识别；连接子模块输出的父模块信号/输出端口在 Verilog 中生成为 `wire`，在 SystemVerilog 中使用 `logic`，其声明初值会移除并在日志提示。缺少子模块接口信息时，VHDL→Verilog 拒绝猜测端口方向。
 
-VHDL `x"0001aa"` 转为保留原位宽的 `24'h1aa`；16 位全零初值使用 `16'h0`。也兼容 `x'0001aa'` 写法。`'0'`、`'1'` 仍按目标上下文转换为合适的常量。
+VHDL `x"0001aa"` 转为保留原位宽的 `24'h1aa`；16 位全零初值使用 `16'h0`。也兼容 `x'0001aa'` 写法。静态全零重复拼接 `{32{1'b0}}` 简化为 `32'b0`；参数化宽度保留重复拼接以支持 generic/parameter 覆盖。`'0'`、`'1'` 仍按目标上下文转换为合适的常量。
 
-VHDL→SystemVerilog 还支持固定一/二维数组、非零/降序数组范围、整体数组循环复制、简单 package/function/record/subtype、numeric_std 常见转换和 selected assignment。新加入的 Verilog/SV→VHDL 与 VHDL→Verilog 路径范围更保守。
+VHDL→SystemVerilog 还支持固定一/二维数组、非零/降序数组范围、整体数组循环复制、简单 package/function/record/subtype、numeric_std 常见转换和 selected assignment。Verilog/SV 路径支持 DDR3 示例生成结果中的 function、固定数组、packed struct、局部静态变量及数组默认初值。完整 case 译码在 Verilog 中使用连续函数调用，保留启动时求值。跨语言互转仅对受支持的 RTL 子集保留功能，不承诺任意 SV 语法、注释或格式无损。运行时二值 `bit` 存储、复杂静态函数状态等不支持的结构会明确拒绝。
 
 ## 声明初值
 
@@ -119,10 +119,11 @@ Verilog/SV 与 VHDL 在 process 启动、delta cycle、四值/九值逻辑、uns
 python -m unittest -q
 python scripts/validate_six.py
 python scripts/validate_numeric.py
+python scripts/validate_roundtrip.py
 .\.venv\Scripts\python.exe scripts/editor_smoke.py
 ```
 
-当前自动化覆盖六种转换方向、真实 Icarus 编译/仿真、Vivado 混合语言时钟/复位对照，以及 512 周期算术、signed、FSM、generate、实例、拼接和重复拼接对照。有限测试不等同形式等价；“常用 RTL 约 80%”仍是产品目标，尚未通过真实客户工程语料测量。
+当前自动化覆盖六种转换方向、真实 Icarus 编译/仿真、Vivado 混合语言时钟/复位对照，以及 512 周期算术、signed、FSM、generate、实例、拼接和重复拼接对照。DDR3 另有 5,000 周期全输出比较，覆盖原始 VHDL、V/SV 及其反向转换结果。有限测试不等同形式等价；“常用 RTL 约 80%”仍是产品目标，尚未通过真实客户工程语料测量。
 
 ## 构建
 

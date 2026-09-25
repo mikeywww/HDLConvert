@@ -57,7 +57,7 @@ class SixDirections(unittest.TestCase):
         self.assertNotIn('No complete target design emitted',result.text)
         self.assertIn('module ddr3_controller_500',result.text)
         self.assertIn('reg [14:0] rows [0:7];',result.text)
-        self.assertIn('function  byte_parity;',result.text)
+        self.assertIn('function automatic  byte_parity;',result.text)
         self.assertIn('request_q[143:16]',result.text)
         self.assertNotRegex(result.text,r'\b(?:logic|always_ff|always_comb|typedef)\b')
 

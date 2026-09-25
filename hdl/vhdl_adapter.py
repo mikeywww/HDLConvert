@@ -20,6 +20,12 @@ class VHDLAdapter:
     def __init__(self,top=None,architecture=None,generics=None):
         self.g=Generator(top,architecture,generics);self.enums={};self.types={};self.functions=[];self.nt_symbols={};self.interfaces={}
     def expr(self,tokens):return expression(tokenize(self.g.expr(tokens)))
+    def array_default(self,tokens,typ):
+        for _ in typ.dimensions:
+            if len(tokens)<5 or [t.lower for t in tokens[:3]]!=['(','others','=>'] or tokens[-1].text!=')':
+                raise ParseError('array aggregate requires a default value at each dimension')
+            tokens=tokens[3:-1]
+        return self.expr(tokens)
     def neutral_type(self,ref):
         name=ref.name.lower()
         if name in self.types:
@@ -83,9 +89,8 @@ class VHDLAdapter:
         kind={'generic':'parameter','constant':'localparam','variable':'variable'}.get(n.kind,n.kind)
         value=n.data.get('value')
         if n.data.get('omit_redundant_initializer'):value=None
-        # Verilog-2001 memory declarations cannot carry aggregate initializers;
-        # reset/process assignments are lowered to explicit element loops.
-        converted=None if typ.dimensions and value else self.expr(value) if value else None
+        # Preserve FPGA power-up state with per-element initial assignments.
+        converted=Expr('aggregate','default',[self.array_default(value,typ)]) if typ.dimensions and value else self.expr(value) if value else None
         decl=Declaration(n.name,typ,kind,direction,converted,line=n.line,source=n.source)
         self.nt_symbols[n.name.lower()]=typ
         return decl
@@ -112,7 +117,7 @@ class VHDLAdapter:
                 if n.kind=='signal' and n.name.lower() in removable:n.data['omit_redundant_initializer']=True
                 d=self.declaration(n)
                 if d:m.declarations.append(d)
-            m.enums=dict(self.enums);m.functions=list(self.functions);m.statements=self.statements(a.children,'concurrent')
+            m.enums=dict(self.enums);m.statements=self.statements(a.children,'concurrent');m.functions=list(self.functions)
             child_outputs={name for statement in self._walk(m.statements) if statement.kind=='instance' for name in statement.data['output_targets']}
             for d in m.declarations:
                 if d.name.lower() in child_outputs and d.value is not None:
@@ -140,9 +145,13 @@ class VHDLAdapter:
                 target_name=d['target'][0].text.lower() if len(d['target'])==1 else ''
                 typ=self.nt_symbols.get(target_name)
                 if typ and typ.dimensions and 'others' in words(d['value']).lower():
-                    body=[Statement('assignment',dict(target=Expr('index',args=[Expr('name',target_name),Expr('name','i')]),value=Expr('literal',"'0"),op='<=' if context=='clocked' else '=',concurrent=False))]
-                    left,right=typ.dimensions[0];ascending=int(left.value)<=int(right.value)
-                    s=Statement('for',dict(name='i',start=left,condition=Expr('binary','<=' if ascending else '>=',[Expr('name','i'),right]),update=Expr('binary','+' if ascending else '-',[Expr('name','i'),Expr('literal','1')]),declared=True,generate=False),body)
+                    if context=='concurrent':raise ParseError('concurrent array aggregate requires generate lowering')
+                    target=Expr('name',target_name)
+                    for dim in range(len(typ.dimensions)):target=Expr('index',args=[target,Expr('name','hdl_i'+str(dim))])
+                    body=[Statement('assignment',dict(target=target,value=self.array_default(d['value'],typ),op='<=' if context=='clocked' and d['op']=='<=' else '=',concurrent=False))]
+                    for dim,(left,right) in reversed(list(enumerate(typ.dimensions))):
+                        ascending=int(left.value)<=int(right.value);name='hdl_i'+str(dim)
+                        s=Statement('for',dict(name=name,start=left,condition=Expr('binary','<=' if ascending else '>=',[Expr('name',name),right]),update=Expr('binary','+' if ascending else '-',[Expr('name',name),Expr('literal','1')]),declared=True,generate=False),body);body=[s]
                     s.line=n.line;s.source=n.source;s.label=n.name;out.append(s);continue
                 s=Statement('assignment',dict(target=self.expr(d['target']),value=self.expr(d['value']),
                     op='<=' if context=='clocked' and d['op']=='<=' else '=',concurrent=context=='concurrent'))
@@ -157,7 +166,24 @@ class VHDLAdapter:
                     default=any(words(v).lower()=='others' for v in values)
                     choices.append(([] if default else [self.expr(v) for v in values],self.statements(body,'comb' if k=='select' else context)))
                 s=Statement('case',dict(expression=self.expr(d['expr']),choices=choices))
-                if k=='select':s=Statement('process',dict(events=[],sensitivity=[],flavor='always_comb'),[s])
+                if k=='select':
+                    # Continuous function evaluation retains VHDL time-zero
+                    # behavior even when a selector's declaration init is stable.
+                    selector=self.expr(d['expr'])
+                    target=choices[0][1][0].data['target']
+                    if selector.kind!='name' or target.kind!='name':raise ParseError('selected assignment needs declared scalar/vector selector and target')
+                    if not any(not values for values,_ in choices):raise ParseError('selected assignment requires others coverage')
+                    name='hdl_select_'+str(len(self.functions))
+                    if name in self.nt_symbols:raise ParseError('selected function name collision')
+                    typ=self.nt_symbols[target.value.lower()]
+                    args=[Declaration('sel',self.nt_symbols[selector.value.lower()],'port','input')]
+                    actuals=[selector];fnchoices=[]
+                    for i,(values,body) in enumerate(choices):
+                        if len(body)!=1 or body[0].kind!='assignment' or body[0].data['target']!=target:raise ParseError('unsupported selected assignment body')
+                        arg='value_'+str(i);args.append(Declaration(arg,typ,'port','input'));actuals.append(body[0].data['value'])
+                        fnchoices.append((values,[Statement('assignment',dict(target=Expr('name',name),value=Expr('name',arg),op='=',concurrent=False))]))
+                    self.functions.append(dict(name=name,type=typ,args=args,locals=[],automatic=True,body=[Statement('case',dict(expression=Expr('name','sel'),choices=fnchoices))]))
+                    s=Statement('assignment',dict(target=target,value=Expr('call',name,actuals),op='=',concurrent=True))
             elif k=='process':s=self.process(n)
             elif k=='return':s=Statement('return',dict(value=self.expr(d['value'])))
             elif k in ('for','generate'):

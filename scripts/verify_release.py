@@ -30,7 +30,7 @@ def main():
                 raise RuntimeError(log[-1])
             return result
 
-        if '2.0.3' not in run(['--version']).stdout:
+        if '2.0.4' not in run(['--version']).stdout:
             raise RuntimeError('version missing')
         if 'MIT License' not in run(['--licenses']).stdout:
             raise RuntimeError('notices missing')
@@ -58,6 +58,19 @@ def main():
         ddr3_text = ddr3_out.read_text(encoding='gb2312')
         if 'module ddr3_controller_500' not in ddr3_text or 'request_q[143:16]' not in ddr3_text:
             raise RuntimeError('DDR3 VHDL-to-Verilog structured lowering failed')
+        if "{32{1'b0}}" in ddr3_text or "32'b0" not in ddr3_text:
+            raise RuntimeError('static zero-fill compaction failed')
+        modern = folder/'roundtrip.sv'
+        back = folder/'roundtrip.v'
+        reverse = folder/'reverse.vhd'
+        run([ddr3_out,'--target','systemverilog','-o',modern])
+        run([modern,'--target','verilog','-o',back])
+        run([back,'--target','vhdl','-o',reverse])
+        if 'end architecture;' not in reverse.read_text(encoding='gb2312'):
+            raise RuntimeError('DDR3 reverse conversion failed')
+        direct_sv = folder/'direct.sv'
+        run([ddr3,'--target','systemverilog','-o',direct_sv])
+        run([direct_sv,'--target','verilog','-o',folder/'direct.v'])
         parent = folder/'parent.vhd'
         parent.write_text('''entity parent is port(y:out std_logic);end;
 architecture rtl of parent is component child is port(q:out std_logic);end component;
@@ -67,6 +80,9 @@ signal q:std_logic:='0';begin u:child port map(q=>q);y<=q;end;''', encoding='utf
         parent_text = parent_out.read_text(encoding='gb2312')
         if 'wire q;' not in parent_text or "wire q = 1'b0" in parent_text:
             raise RuntimeError('child output ownership regression')
+        run([parent,'--target','systemverilog','-o',folder/'parent.sv'])
+        if 'logic q;' not in (folder/'parent.sv').read_text(encoding='gb2312'):
+            raise RuntimeError('SV child output logic declaration regression')
         fragment = folder/'fragment.vhd'
         fragment.write_text("process(clk) begin if rising_edge(clk) then q<='1';end if;end process;", encoding='utf-8')
         fragment_out = folder/'fragment.v'

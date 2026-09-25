@@ -52,13 +52,13 @@ end;'''
         result = convert_text(source, source_language='vhdl', target_language='verilog')
         self.assertIn("assign y = 24'h1aa;", result.text)
 
-    def test_sv_component_output_is_wire_too(self):
+    def test_sv_component_output_is_logic(self):
         source = '''entity p is port(y:out std_logic);end;
 architecture rtl of p is component c is port(q:out std_logic);end component;
 signal q:std_logic:='0';begin u:component c port map(q=>q);y<=q;end;'''
         result = convert_text(source, source_language='vhdl', target_language='systemverilog')
-        self.assertIn('wire q;', result.text)
-        self.assertNotIn("wire q = 1'b0", result.text)
+        self.assertIn('logic q;', result.text)
+        self.assertNotIn("logic q = 1'b0", result.text)
         self.assertNotIn('unsupported instance mapping', result.text)
 
     def test_entity_output_direction_across_design_units(self):
@@ -78,7 +78,7 @@ begin u:child port map(q=>y);end;'''
         for target in ('verilog','systemverilog'):
             with self.subTest(target=target):
                 result = convert_text(source, source_language='vhdl', target_language=target)
-                self.assertIn('output wire y', result.text)
+                self.assertIn('output '+('wire' if target=='verilog' else 'logic')+' y', result.text)
 
     def test_unknown_child_directions_require_interface(self):
         source = '''entity parent is port(y:out std_logic);end;

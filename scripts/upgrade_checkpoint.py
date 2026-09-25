@@ -8,7 +8,7 @@ def save(stage, completed, files, tests, issues, next_step):
     old = path.read_text(encoding='utf-8')
     history = old.split('## 阶段历史\n', 1)[-1].strip()
     return checkpoint('HDL Upgrade ' + stage, completed, files, tests, issues,
-        next_step + '\nFixed workspace D:/WORK/PRJ/HDLConvert. Future releases require explicit user permission; v2.0.1 publication was authorized on 2026-09-19. Regenerable build output and local reference clones are not retained.',
+        next_step + '\nFixed workspace D:/WORK/PRJ/HDLConvert. Do not push or publish without new explicit authorization. Build outputs are local and ignored by Git.',
         history + '\n- ' + stage + ': ' + tests, mail='No email for intermediate checkpoint; notify only on important feature completion or observed usage exhaustion.')
 
 if __name__ == '__main__':

@@ -76,14 +76,14 @@ class Generator:
             direction = d['direction'] or 'in'
             if direction not in ('in', 'out', 'inout'):
                 raise ParseError(f'unsupported port mode {direction}')
-            prefix = {'in': 'input ', 'out': 'output ', 'inout': 'inout wire '}[direction]
+            prefix = {'in': 'input ', 'out': 'output ', 'inout': 'inout '}[direction]
         if n.kind in ('signal','port') and d.get('child_output_net'):
             if n.kind == 'port' and d.get('direction') != 'out':
                 raise ParseError('child output cannot drive an input/inout parent port')
             if not typ.sv.startswith(('logic', 'bit')):
                 raise ParseError('child output requires a net-compatible signal type')
-            typ = copy.copy(typ)
-            typ.sv = re.sub(r'^(logic|bit)\b', 'wire', typ.sv)
+            # Single-driver child connections may use logic in SV. Verilog's
+            # separate generator still requires wire for the same connection.
         value = d.get('value', [])
         if value and d.get('omit_redundant_initializer'):
             value = []

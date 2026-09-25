@@ -61,6 +61,9 @@ class ExpressionParser:
                 args = [first]
                 while self.peek() == ',': self.pop(); args.append(self.parse())
                 self.pop('}'); left = Expr('concat', '', args)
+        elif value=="'" and self.peek()=='{':
+            self.pop('{');self.pop('default');self.pop(':');item=self.parse();self.pop('}')
+            left=Expr('aggregate','default',[item])
         elif re.match(r"[0-9']", value): left = Expr('literal', value)
         elif re.fullmatch(r'[$a-zA-Z_][$\w]*', value) or value.startswith('\\'):
             left = Expr('name', value)
@@ -102,6 +105,10 @@ def expression(tokens):
 
 
 def literal_int(e):
+    if e.kind=='conditional':return literal_int(e.args[1] if literal_int(e.args[0]) else e.args[2])
+    if e.kind=='binary' and e.value in ('==','!=','<','>','<=','>='):
+        a,b=map(literal_int,e.args)
+        return int({'==':a==b,'!=':a!=b,'<':a<b,'>':a>b,'<=':a<=b,'>=':a>=b}[e.value])
     if e.kind == 'unary' and e.value in ('+', '-'):
         v = literal_int(e.args[0]); return v if e.value == '+' else -v
     if e.kind == 'binary' and e.value in ('+', '-', '*', '/', '**'):
@@ -113,3 +120,25 @@ def literal_int(e):
     m = re.fullmatch(r"(\d+)?'[sS]?([bBoOdDhH])([0-9a-fA-F]+)", s)
     if not m: raise ValueError('unknown-valued literal')
     return int(m[3], {'b':2, 'o':8, 'd':10, 'h':16}[m[2].lower()])
+
+
+def constant_difference(left,right):
+    """Prove an affine bound difference such as (i*8+7)-(i*8)."""
+    def linear(e):
+        try:return {},literal_int(e)
+        except ValueError:pass
+        if e.kind=='name':return {e.value:1},0
+        if e.kind=='binary' and e.value in ('+','-'):
+            a,x=linear(e.args[0]);b,y=linear(e.args[1]);sign=1 if e.value=='+' else -1
+            a=dict(a)
+            for name,value in b.items():a[name]=a.get(name,0)+sign*value
+            return a,x+sign*y
+        if e.kind=='binary' and e.value=='*':
+            try:factor=literal_int(e.args[0]);term=e.args[1]
+            except ValueError:factor=literal_int(e.args[1]);term=e.args[0]
+            terms,value=linear(term)
+            return {name:coefficient*factor for name,coefficient in terms.items()},value*factor
+        raise ValueError('non-affine bound')
+    terms,value=linear(Expr('binary','-',[left,right]))
+    if any(terms.values()):raise ValueError('bound difference is not constant')
+    return value
