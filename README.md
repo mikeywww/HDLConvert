@@ -8,6 +8,8 @@ VHDL ↔ Verilog ↔ SystemVerilog
 
 工具采用 tokenizer、结构化 parser、统一 RTL IR 和目标 generator，不是基于大量文本替换，也不是完整 HDL 编译器。转换正确性和明确拒绝优先于极端语法覆盖率。
 
+当前本地开发候选版为 `dist/HDLConvert-2.1.0.exe`，包含工程输入、统一保存及四值转换扩展，尚未发布到 GitHub。构建与验收信息见 [RELEASE.md](RELEASE.md)。
+
 ## Windows 单文件版
 
 从 [GitHub Releases](https://github.com/mikeywww/HDLConvert/releases/latest) 下载 `HDLConvert.exe`。无需安装 Python；双击打开 GUI，也可从命令行使用。
@@ -65,7 +67,21 @@ python hdlconvert.py design.vhd --target systemverilog --top demo --architecture
 python hdlconvert.py design.vhd --target systemverilog --dependency types.vhd --strict
 ```
 
-`--dependency` 目前只用于 VHDL→SystemVerilog package 元数据。日志等级为 INFO、WARNING、ERROR；退出码 0 表示全部成功，1 表示至少一个文件失败，2 表示 CLI 参数错误。
+`--dependency` 同时支持完整 VHDL→Verilog/SystemVerilog 的 package 和 entity 接口元数据，可重复指定且无需按 package 依赖顺序排列。文件内可含多个设计单元，也支持 package 头和 body 分文件；重复定义、循环 package 依赖和目录匹配歧义会明确拒绝。
+
+```powershell
+.\.venv\Scripts\python.exe hdlconvert.py main.vhd --target verilog --dependency types.vhd --dependency child_interfaces.vhd
+.\.venv\Scripts\python.exe hdlconvert.py main.vhd --target systemverilog --search-dir rtl --search-dir packages --top main
+.\.venv\Scripts\python.exe hdlconvert.py -f project.f --target verilog --output-dir converted --search-dir packages --report build/conversion-report.json
+```
+
+`project.f` 每行是一个要转换的文件路径，相对该列表文件所在目录解析；允许空行、以 `#` 开头的注释、带空格的路径及可选的成对引号。`-f` 可重复并与直接输入组合，路径去重；列表不包含编译器选项、通配符或嵌套列表。列表用于选择批量转换输入，依赖元数据仍通过 `--dependency` / `--search-dir` 提供。
+
+搜索目录不递归，按 package/entity 名称匹配 `.vhd` / `.vhdl` 文件名（大小写不敏感）；源文件同目录也参与搜索。显式依赖文件优先，任意文件名应使用 `--dependency`。显式依赖文件所在目录不会自动加入搜索范围，需用 `--search-dir` 指定。缺少而未使用的 package 保持原有忽略策略；目录搜索不等同完整 VHDL library binding 或 elaboration。
+
+依赖 entity 只提供接口，不会在当前输出中生成其 RTL；子模块应作为输入单独转换。Verilog 把使用的简单 package 声明内联。SystemVerilog 保留 package 限定引用，依赖文件中的 package 不会重复写进每个模块输出；请单独转换 package 定义，并按依赖顺序编译，再编译模块。源文件自身的 package 定义仍会输出。`--top` 选择当前输入文件内的设计单元，不选择依赖文件中的模块。带依赖/搜索上下文的代码段及 Verilog/SV 输入当前明确拒绝。
+
+`--report` 写入 UTF-8 `.json`，包含 `schema_version`、成功/失败/警告文件数、每个输入的目标路径、保存状态及 severity/line/message 诊断。`complete=true` 仅表示转换完整；严格模式拒绝保存时 `status` 仍为 `failed`，并保留 WARNING 和拒绝原因。输入读取或文件系统错误可能没有行号。报告与 HDL 都使用原子保存，报告不得覆盖输入、依赖、列表或目标 HDL；批量目标也不能覆盖其他输入。某个文件失败后继续转换其余文件。日志等级为 INFO、WARNING、ERROR；退出码 0 表示全部成功，1 表示转换或报告保存失败，2 表示 CLI 参数错误。
 
 ## 主要支持范围
 
@@ -102,6 +118,10 @@ Verilog/SV 的合法 `` `timescale `` 指令按模块保留，包括多个模块
 SV 的 `int unsigned` 在 Verilog 中保留为无符号 32 位 parameter、reg 或 wire，保持高位比较和右移行为。`unique` / `unique0` / `priority case` 在 SV 输出中保留；转 Verilog 时，仅在可证明限定条件不改变综合行为时降为普通 case：unique 要求显式 default 和互斥的固定枚举/数值标签，unique0 可省略 default，priority 要求 default。参数相关、重叠或无法证明的 unique 标签明确拒绝；带限定符的 if 暂不支持。
 
 无分支、无自身或向后依赖的 `always_comb` 整信号赋值链可转换为连续 assign，保留启动时求值和顺序依赖。目标带初始化、存在多个过程驱动或缺少类型证据时不使用这一降低方式；复杂组合调度仍需按支持边界检查。
+
+Verilog/SV→VHDL 支持 packed vector、signed vector 和标量 bit 的 `&`、`|`、`^`、`~&`、`~|`、`~^` / `^~` reduction，结果保留为一位 std_logic；使用 [IEEE std_logic_1164 的 VHDL-2008 一元逻辑运算](https://github.com/ghdl/ghdl/blob/master/libraries/ieee2008/std_logic_1164.vhdl)，避免把 X/Z 结果变成 boolean。两个 packed-bit 操作数的 `&&` / `||` 及 packed-bit 的 `!` 同样使用四值逻辑映射。integer、unpacked array 或 boolean reduction 仍明确拒绝；这不扩大比较、混合类型或任意复合表达式的等价保证。
+
+并发 `assign {hi,lo}=d` 可转 VHDL，包括嵌套拼接、标量/向量目标、升序或非零边界、signed 扩展和截断。目标须为不同的完整信号，且各自位宽可静态证明；过程内拼接赋值、部分目标、参数相关目标宽度及含用户函数的 RHS 仍拒绝，避免改变一次求值和调度语义。拼接中的每个信号都参加驱动归属检查。
 
 ## 部分代码段
 
@@ -167,6 +187,18 @@ Verilog/SV 与 VHDL 在 process 启动、delta cycle、四值/九值逻辑、uns
 
 ## 验证
 
+建议使用包含 Tcl/Tk 的标准 Python 创建虚拟环境；部分 FPGA 工具附带的嵌入式 Python 启用隔离模式，不能作为项目 CLI/GUI 的测试运行时。Windows 可使用 `py -3.14 -m venv .venv`（或其他已安装的 Python 3.10+ 版本），再安装 `requirements.txt`。
+
+统一回归入口会检查运行环境，并在 `build/test-report.json` 保存解释器、模拟器路径、测试清单、失败详情及跳过原因：
+
+```powershell
+.\.venv\Scripts\python.exe scripts/run_tests.py --suite all --require-simulator
+.\.venv\Scripts\python.exe scripts/run_tests.py --suite core
+.\.venv\Scripts\python.exe scripts/run_tests.py --suite gui --report build/gui-report.json
+```
+
+`core` 不加载 Tk GUI 测试；`gui` 运行 GUI 模型、保存及入口测试，不代替下方的原生窗口冒烟检查。`all` 需要 Tk 和 tkinterdnd2。Icarus 的 `iverilog`、`vvp` 应在 PATH 中；未使用 `--require-simulator` 时可在缺少模拟器的环境运行，报告会列出跳过项，不能把跳过视为仿真通过。运行入口不依赖预先存在的 build 目录，并把相对测试资源定位到当前项目。
+
 ```powershell
 python -m unittest -q
 python scripts/validate_six.py
@@ -174,6 +206,24 @@ python scripts/validate_numeric.py
 python scripts/validate_roundtrip.py
 .\.venv\Scripts\python.exe scripts/editor_smoke.py
 ```
+
+## 工程语料评估
+
+```powershell
+.\.venv\Scripts\python.exe scripts/evaluate_corpus.py tests/corpus/manifest.json --compile --report build/corpus-report.json
+.\.venv\Scripts\python.exe scripts/validate_reductions.py
+.\.venv\Scripts\python.exe scripts/run_tests.py --suite all --require-simulator --require-vhdl-simulator
+```
+
+语料 manifest 使用 `schema_version: 1` 与 `cases` 数组，每项包含唯一 `id` 和相对 manifest 的 `path`。可选 `source`、`targets`、`top`、`architecture`、`generics`、`dependencies`、`search_dirs`、`fragment_context`；`compile_files` 按完整目标语言名称指定额外目标语言编译文件。`derive_source` 可先从原文件派生另一种语言来测反向转换，报告始终标为 derived，不能当作独立工程。`sample_kind` 区分 repository / synthetic / derived / unspecified。
+
+报告列出六向转换的实际分母、成功数、警告、拒绝分类、编译状态及来源分组，并记录输入/依赖/搜索候选文件哈希和转换器代码指纹。零样本方向的成功率为 null。拒绝分类是对诊断文本的辅助归类，不是稳定诊断码。`--compile` 使用 PATH 中的 Icarus/GHDL；缺少编译器记为 skipped，转换失败则 not_attempted。GHDL 只做 VHDL-2008 analysis，Icarus 做语法/类型/展开检查；两者不代表行为等价。通用语料报告的 equivalence 始终为 not_run，行为证据由专用 testbench 单独建立。
+
+评估正常完成时，已知语法拒绝不会使命令失败；使用 `--fail-on-rejection` 可把拒绝也作为退出码 1。输入读取错误、内部异常或编译失败返回 1；manifest/参数错误返回 2。报告不能覆盖 manifest、输入、依赖或编译辅助文件。
+
+首轮仓库语料为 5 个仓库样例、2 个相关派生样例和 3 个合成探针，共 20 次转换尝试；扩展前 16 次、扩展后 19 次完整转换。19 份结果均通过所述编译检查；剩余 Aurora SV→VHDL 在第 47 行 `$clog2` 明确拒绝。小样本及派生相关性不能用于声称客户工程覆盖率。专用四值对照检查了两种源语言、宽度 1/4/5 的 2,568 行 reduction/逻辑/拼接输出，含 X/Z、范围方向、signed 扩展及截断；仍属于有限行为验证。
+
+六向文本 API 的源语言自动识别失败、无效源语言及受支持异常范围内的解析/生成失败，均返回 `complete=False` 和 ERROR 诊断；无效目标语言属于调用参数错误，仍抛出 `ValueError`。文件 API 对失败转换抛出异常且不写入。GUI 和两个文件 API 共用编码后原子替换保存，编码失败或替换失败保留已有目标文件。
 
 当前自动化覆盖六种转换方向、真实 Icarus 编译/仿真、Vivado 混合语言时钟/复位对照，以及 512 周期算术、signed、FSM、generate、实例、拼接和重复拼接对照。DDR3 另有 5,000 周期全输出比较，覆盖原始 VHDL、V/SV 及其反向转换结果。有限测试不等同形式等价；“常用 RTL 约 80%”仍是产品目标，尚未通过真实客户工程语料测量。
 

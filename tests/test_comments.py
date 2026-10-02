@@ -2,6 +2,7 @@
 from pathlib import Path
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -10,7 +11,7 @@ from hdlconvert.comments import attach_comments
 from hdlconvert.parser import Parser
 
 ROOT=Path(__file__).resolve().parents[1]
-IVERILOG=Path('D:/APP/FPGAtool/oss-cad-suite/bin/iverilog.exe')
+IVERILOG=Path(shutil.which('iverilog')) if shutil.which('iverilog') else None
 
 SOURCE="""---module_header
 library ieee;
@@ -69,9 +70,9 @@ class CommentTests(unittest.TestCase):
         return result.text
 
     def compile(self,text,target):
-        if not IVERILOG.exists():self.skipTest('Icarus unavailable')
+        if IVERILOG is None:self.skipTest('Icarus unavailable')
         env=os.environ.copy();env['PATH']=str(IVERILOG.parent)+';'+str(IVERILOG.parent.parent/'lib')+';'+env['PATH']
-        with tempfile.TemporaryDirectory(dir=ROOT/'build') as folder:
+        with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/('comment.v' if target=='verilog' else 'comment.sv')
             path.write_text(text,encoding='utf-8')
             cp=subprocess.run([str(IVERILOG),'-g2005' if target=='verilog' else '-g2012','-s','comment_demo','-o',str(Path(folder)/'sim'),str(path)],env=env,capture_output=True,text=True,timeout=30)

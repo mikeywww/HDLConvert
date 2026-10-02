@@ -66,7 +66,7 @@ def remove_declaration_initializers(design):
     return design
 
 
-def prepare(design,source_path=None):
+def prepare(design,source_path=None,dependency_interfaces=None):
     remove_declaration_initializers(design)
     lower_comb_chains(design)
     entities={n.name.lower():n for n in design.units if n.kind=='entity'}
@@ -78,6 +78,7 @@ def prepare(design,source_path=None):
     for arch in (n for n in design.units if n.kind=='architecture'):
         arch.data['interface_ranges']=[]
         decl=arch.data['decl'];interfaces={n.name.lower():n for n in decl if n.kind=='component'}
+        interfaces.update(dependency_interfaces or {})
         interfaces.update(entities)
         instances=[n for n in walk(arch.children) if n.kind=='instance']
         for n in instances:

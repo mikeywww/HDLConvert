@@ -7,10 +7,11 @@ import subprocess
 import struct
 import sys
 import tempfile
+import json
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-VERSION = '2.0.8'
+from hdlconvert.version import VERSION
 
 
 def verify_stage32(folder,run):
@@ -294,16 +295,85 @@ def verify_fragments(folder,run,names=None):
     run([conflict,'--target','vhdl'],expected=1)
 
 
-def main(fragments_only=False,stage31=False,stage32=False,exe_path=None):
+def verify_engineering(folder,run):
+    """Use the isolated EXE for context/report cases and four-state conversion traces."""
+    from tests.test_project import BASE,TYPES,MAIN,CHILD,PARENT
+    from scripts.validate_reductions import run_validation
+    from hdlconvert.converter import ConversionResult
+
+    project=folder/'工程 inputs';project.mkdir()
+    for name,code in [('base-meta.vhd',BASE),('types-meta.vhd',TYPES),
+                      ('main.vhd',MAIN),('child.vhd',CHILD),('parent.vhd',PARENT)]:
+        (project/name).write_text(code,encoding='utf-8')
+    inputs=project/'project.f';inputs.write_text('# inputs\nmain.vhd\nchild.vhd\nparent.vhd\n',encoding='utf-8')
+    for target,extension in [('verilog','.v'),('systemverilog','.sv')]:
+        output=project/target;report=project/(target+'.json')
+        run(['-f',inputs,'--target',target,'--dependency',project/'types-meta.vhd',
+             '--dependency',project/'base-meta.vhd','--dependency',project/'child.vhd',
+             '--output-dir',output,'--report',report,'--strict'])
+        payload=json.loads(report.read_text(encoding='utf-8'))
+        if payload['success']!=3 or payload['failed'] or payload['files_with_warnings']:
+            raise RuntimeError('frozen engineering report counters differ')
+        main_text=(output/('main'+extension)).read_text(encoding='gb2312')
+        if target=='systemverilog' and ('types::byte_t' not in main_text or 'package types;' in main_text):
+            raise RuntimeError('frozen dependency package scope/metadata mismatch')
+        if target=='verilog' and 'localparam integer W = 8' not in main_text:
+            raise RuntimeError('frozen dependency package did not flatten')
+        parent_text=(output/('parent'+extension)).read_text(encoding='gb2312')
+        if '.q(q)' not in parent_text or 'module child' in parent_text:
+            raise RuntimeError('frozen dependency entity emission mismatch')
+
+    cycle=project/'cycle.vhd';cycle.write_text('use work.types.all;'+BASE,encoding='utf-8')
+    protected=project/'keep.v';protected.write_bytes(b'old RTL')
+    cycle_report=project/'cycle.json'
+    run([project/'main.vhd','--target','verilog','--dependency',project/'types-meta.vhd',
+         '--dependency',cycle,'-o',protected,'--report',cycle_report],expected=1)
+    payload=json.loads(cycle_report.read_text(encoding='utf-8'))
+    if protected.read_bytes()!=b'old RTL' or 'cyclic package' not in str(payload):
+        raise RuntimeError('frozen context failure damaged prior output or lost report')
+
+    # Check relative directory discovery independently of explicit files.
+    library=project/'library';library.mkdir()
+    (library/'base.vhd').write_text(BASE,encoding='utf-8')
+    (library/'types.vhd').write_text(TYPES,encoding='utf-8')
+    run([project/'main.vhd','--target','verilog','--search-dir',library,'-o',project/'searched.v','--strict'])
+    if 'localparam integer W = 8' not in (project/'searched.v').read_text(encoding='gb2312'):
+        raise RuntimeError('frozen transitive search directory context failed')
+
+    invalid=project/'invalid.v';invalid.write_text('module m(input[7:0]d,output q);\nlocalparam N=$clog2(4);\nassign q=d[0];endmodule',encoding='utf-8')
+    report=project/'invalid.json'
+    run([invalid,'--target','vhdl','--report',report],expected=1)
+    payload=json.loads(report.read_text(encoding='utf-8'))
+    if not any(item['line']==2 and '$clog2' in item['message'] for item in payload['files'][0]['diagnostics']):
+        raise RuntimeError('frozen VHDL error line context lost')
+
+    # Host simulators run separately; the frozen app still sees only Windows PATH.
+    def converted(code,*,source_language,target_language):
+        path=project/('probe'+('.v' if source_language=='verilog' else '.sv'))
+        destination=project/(source_language+'-probe.vhd')
+        path.write_text(code,encoding='utf-8')
+        run([path,'--source',source_language,'--target',target_language,'-o',destination,'--output-encoding','utf-8','--strict'])
+        return ConversionResult(destination.read_text(encoding='utf-8'),[])
+    compared=run_validation(project/'four-state-validation',converter=converted)
+    if compared!=2568:raise RuntimeError('frozen differential trace count differs')
+    shutil.copytree(project/'four-state-validation',ROOT/'build'/('frozen-four-state-'+VERSION),dirs_exist_ok=True)
+
+
+def main(fragments_only=False,stage31=False,stage32=False,exe_path=None,engineering=False):
     image_path=Path(exe_path).resolve() if exe_path else ROOT/'dist'/'HDLConvert.exe'
     stage_log=(ROOT/'build'/'release-stage32.log' if stage32 else
-               ROOT/'build'/'release-stage31.log' if stage31 else None)
+               ROOT/'build'/'release-stage31.log' if stage31 else ROOT/'build'/('release-'+VERSION+'.log'))
     if stage_log:
         stage_log.parent.mkdir(parents=True,exist_ok=True)
         stage_log.write_text('Verifying HDLConvert '+VERSION+'\n',encoding='utf-8')
     image=image_path.read_bytes()
     pe=struct.unpack_from('<I',image,0x3c)[0]
     if struct.unpack_from('<H',image,pe+24+68)[0]!=2:raise RuntimeError('EXE is not a Windows GUI subsystem executable')
+    if len(image)>=20*1024*1024:raise RuntimeError('EXE exceeds the 20 MiB size target')
+    import pefile
+    metadata=pefile.PE(str(image_path)).VS_FIXEDFILEINFO[0]
+    actual=(metadata.FileVersionMS>>16,metadata.FileVersionMS&65535,metadata.FileVersionLS>>16,metadata.FileVersionLS&65535)
+    if actual!=tuple(map(int,VERSION.split('.')))+(0,):raise RuntimeError('PE file version does not match CLI version')
     env = {k: v for k, v in os.environ.items()
            if not k.upper().startswith(('PYTHON', 'TCL', 'TK_LIBRARY', 'VIRTUAL_ENV'))}
     env['PATH'] = str(Path(env['SYSTEMROOT'])/'System32')
@@ -341,6 +411,12 @@ def main(fragments_only=False,stage31=False,stage32=False,exe_path=None):
         if stage31:
             verify_stage31(folder,run)
             log.append('PASS: isolated '+VERSION+' PE/version/licenses/native GUI, ignored headers, Chinese comment positions, Vivado primitive templates/ownership, GBK and GB2312, package qualification and failed-output preservation')
+            stage_log.write_text('\n'.join(log),encoding='utf-8')
+            print(log[-1])
+            return
+        if not fragments_only:verify_engineering(folder,run)
+        if engineering:
+            log.append('PASS: isolated '+VERSION+' PE/version/licenses/native GUI, dependency ordering/search/file-list/JSON and failure preservation, source error lines, 2568 four-state reduction/logical/concat trace comparisons')
             stage_log.write_text('\n'.join(log),encoding='utf-8')
             print(log[-1])
             return
@@ -425,7 +501,7 @@ signal q:std_logic:='0';begin u:child port map(q=>q);y<=q;end;''', encoding='utf
                 run([source,'--target',target,'-o',output],expected=1)
                 if output.read_text()!='keep':raise RuntimeError('incomplete EXE conversion overwrote valid output')
     (ROOT/'build'/'release-verification.log').write_text('\n'.join(log), encoding='utf-8')
-    print('PASS: isolated EXE version/licenses, native editor/DnD, GBK input, Unicode path, legacy golden output, DDR3 and child-output VHDL-to-Verilog, process fragment, new directions and failure preservation')
+    print('PASS: isolated EXE version/licenses, native editor/DnD, GBK input, Unicode path, engineering context/report, 2568 four-state comparisons, legacy golden output, DDR3 and child-output VHDL-to-Verilog, process fragment, new directions and failure preservation')
 
 
 if __name__ == '__main__':
@@ -435,10 +511,11 @@ if __name__ == '__main__':
     modes.add_argument('--fragments-only',action='store_true',help='verify only changed fragment/GUI paths and packaging')
     modes.add_argument('--stage31',action='store_true',help='verify only ignored headers, source comments, Vivado primitives and package context in the frozen EXE')
     modes.add_argument('--stage32',action='store_true',help='verify only timescale directives, SV detection and preprocessing-failure protection in the frozen EXE')
+    modes.add_argument('--engineering',action='store_true',help='verify new engineering inputs and four-state VHDL output; requires Icarus/GHDL on host PATH')
     p.add_argument('--exe',type=Path,help='read-only path to the executable to verify; default: dist/HDLConvert.exe')
     args=p.parse_args()
     try:
-        main(args.fragments_only,args.stage31,args.stage32,args.exe)
+        main(args.fragments_only,args.stage31,args.stage32,args.exe,args.engineering)
     except Exception as exc:
         if args.stage32:
             stage_log=ROOT/'build'/'release-stage32.log'

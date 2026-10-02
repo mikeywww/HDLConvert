@@ -6,7 +6,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from .api import convert_text, detect_language, SUFFIX
-from hdlconvert.encoding import read_source, output_codec
+from hdlconvert.encoding import read_source, atomic_write_text
 
 LABELS={'自动检测':'auto','VHDL':'vhdl','Verilog':'verilog','SystemVerilog':'systemverilog'}
 NAMES={v:k for k,v in LABELS.items()}
@@ -211,9 +211,8 @@ class EditorApp:
         if not path:return
         if self.path and Path(path).resolve()==self.path.resolve():self.append_log('错误：请选择其他输出路径，不能覆盖源文件。');return
         try:
-            codec=output_codec(ENCODINGS[self.output_encoding.get()])
-            data=self.output.get().encode(codec)
-            Path(path).write_bytes(data);self.status.set('已保存 '+path+'（'+self.output_encoding.get()+'）')
+            atomic_write_text(path,self.output.get(),ENCODINGS[self.output_encoding.get()])
+            self.status.set('已保存 '+path+'（'+self.output_encoding.get()+'）')
         except (OSError,UnicodeError,ValueError) as exc:self.append_log('错误：'+str(exc))
     def copy(self):
         self.root.clipboard_clear();self.root.clipboard_append(self.output.get());self.status.set('转换结果已复制')

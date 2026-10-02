@@ -1,12 +1,9 @@
 """Public conversion API shared by command line and GUI."""
 from dataclasses import dataclass
 from pathlib import Path
-import os
-import tempfile
 from .parser import Parser
 from .generator import Generator
 from .lexer import ParseError, tokenize
-from .encoding import read_source, output_codec
 
 
 @dataclass
@@ -15,6 +12,13 @@ class ConversionResult:
     diagnostics: list
     output_path: Path | None = None
     complete: bool = True
+
+
+class ConversionError(ParseError):
+    """A rejected file write carrying the text API diagnostics for batch reports."""
+    def __init__(self, message, result):
+        super().__init__(message)
+        self.result = result
 
 
 def convert_text(source, *, top=None, architecture=None, generics=None):
@@ -33,35 +37,7 @@ def convert_file(input_path, output_path=None, *, dependencies=(), strict=False,
         raise ValueError('output must have .sv extension')
     if output == source:
         raise ValueError('output cannot overwrite source')
-    # Dependencies supply package/type metadata. Emit only units in primary input,
-    # but generate dependencies first to populate the package symbol registry.
-    generator = Generator(options.get('top'), options.get('architecture'),
-                          {k.lower(): tokenize(str(v)) for k, v in options.get('generics', {}).items()})
-    generator.source_path=source
-    for path in dependencies:
-        dep = Path(path).resolve()
-        if dep != source:
-            parsed = Parser(read_source(dep)).parse()
-            if any(u.kind not in ('package', 'package_body', 'unsupported') for u in parsed.units):
-                raise ValueError('--dependency accepts package files only')
-            old_top, old_arch = generator.top, generator.architecture
-            generator.top, generator.architecture = None, None
-            generator.generate(parsed)
-            generator.top, generator.architecture = old_top, old_arch
-    text = generator.generate(Parser(read_source(source)).parse())
-    result = ConversionResult(text, generator.diagnostics, output, not generator.incomplete)
-    if not result.complete:
-        raise ParseError('incomplete conversion; output was not written: '+str(result.diagnostics[-1]))
-    if strict and result.diagnostics:
-        raise ParseError(f'{len(result.diagnostics)} warning(s); strict mode did not write output')
-    output.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(mode='w', encoding=output_codec(output_encoding), newline='\n', dir=output.parent, suffix='.tmp', delete=False) as stream:
-            temp_path = Path(stream.name)
-            stream.write(result.text)
-        os.replace(temp_path, output)
-    finally:
-        if temp_path and temp_path.exists():
-            temp_path.unlink()
-    return result
+    # Keep the historical API, but share file context and output safety with CLI/GUI.
+    from hdl.api import convert_file as convert_hdl
+    return convert_hdl(source, output, source_language='vhdl', target_language='systemverilog',
+                       dependencies=dependencies, strict=strict, output_encoding=output_encoding, **options)

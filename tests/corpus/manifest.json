@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {"id": "ddr3-vhdl", "path": "../vhdl/ddr3_controller_500.vhd", "sample_kind": "repository"},
+    {"id": "array-vhdl", "path": "../vhdl/array_test.vhd", "sample_kind": "repository"},
+    {"id": "rtl-demo-vhdl", "path": "../vhdl/rtl_demo.vhd", "sample_kind": "repository"},
+    {"id": "initializers-vhdl", "path": "../vhdl/initializer_drivers.vhd", "sample_kind": "repository"},
+    {"id": "aurora-native-sv", "path": "../sv/aurora_packet_bridge.sv", "sample_kind": "repository"},
+    {"id": "ddr3-derived-v", "path": "../vhdl/ddr3_controller_500.vhd", "derive_source": "verilog", "sample_kind": "derived"},
+    {"id": "ddr3-derived-sv", "path": "../vhdl/ddr3_controller_500.vhd", "derive_source": "systemverilog", "sample_kind": "derived"},
+    {"id": "reductions-v", "path": "reductions.v", "sample_kind": "synthetic"},
+    {"id": "reductions-sv", "path": "reductions.v", "source": "systemverilog", "sample_kind": "synthetic"},
+    {"id": "concat-target-sv", "path": "concat_target.sv", "sample_kind": "synthetic"}
+  ]
+}

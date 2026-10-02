@@ -5,17 +5,15 @@ reuses its symbol/expression analysis while mapping structure directly into neut
 IR for new targets. Verilog and SV share one front end and target-aware generator.
 """
 from pathlib import Path
-import os
 import re
-import tempfile
 from hdlconvert.ast import Diagnostic
-from hdlconvert.converter import ConversionResult
+from hdlconvert.converter import ConversionResult, ConversionError
 from hdlconvert.lexer import ParseError, tokenize as vhdl_tokens
 from hdlconvert.parser import Parser as VHDLParser
 from hdlconvert.generator import Generator as LegacyGenerator
-from hdlconvert.encoding import read_source, output_codec
+from hdlconvert.encoding import read_source, atomic_write_text
 from .parser import Parser
-from .verilog import VerilogGenerator, walk, targets, root_name, validate_case_qualifiers
+from .verilog import VerilogGenerator, walk, targets, root_name, target_names, validate_case_qualifiers
 from .vhdl import VHDLGenerator
 
 LANGUAGES=('vhdl','verilog','systemverilog')
@@ -52,20 +50,28 @@ def comment_draft(source,target,message):
     return prefix+' WARNING / TODO: '+message+'\n'+prefix+' No complete target design emitted. Original source follows.\n'+'\n'.join(prefix+' '+line for line in source.splitlines())+'\n'
 
 
-def convert_text(source, *, source_language=None, target_language='systemverilog', top=None, architecture=None, generics=None, source_path=None, fragment_context='auto'):
-    src=language(source_language) if source_language else detect_language(source)
+def convert_text(source, *, source_language=None, target_language='systemverilog', top=None, architecture=None, generics=None, source_path=None, fragment_context='auto', dependencies=(), search_dirs=()):
     dst=language(target_language)
     diagnostics=[]
+    backend=None
     try:
+        src=language(source_language) if source_language else detect_language(source)
+        if (dependencies or search_dirs) and src!='vhdl':raise ParseError('dependency/search context currently requires VHDL input')
         from .fragments import convert_fragment
         fragment=convert_fragment(source,src,dst,fragment_context)
         if fragment is not None:
+            if dependencies or search_dirs:raise ParseError('dependency/search context requires a complete VHDL design unit')
             if top or architecture or generics:raise ParseError('top/architecture/generic overrides require a complete design unit')
             return fragment
         if src=='vhdl':
             design=VHDLParser(source).parse()
+            primary_packages={unit.name.lower() for unit in design.units if unit.kind=='package'}
+            from hdlconvert.project import vhdl_context
+            design,interfaces=vhdl_context(design,dependencies,source_path,search_dirs)
             generator=LegacyGenerator(top,architecture,{k.lower():vhdl_tokens(str(v)) for k,v in (generics or {}).items()})
             generator.source_path=source_path
+            generator.dependency_interfaces=interfaces
+            generator.emit_packages=primary_packages
             normalized=generator.generate(design)
             if generator.incomplete:
                 diagnostics+=generator.diagnostics
@@ -93,9 +99,10 @@ def convert_text(source, *, source_language=None, target_language='systemverilog
                         for name in targets(n.body):owners[name]=owners.get(name,0)+1
                         if not n.data['events'] and n.data['flavor']=='always':
                             diagnostics.append(Diagnostic(n.line,'VHDL process executes at time zero; original Verilog always sensitivity semantics require startup review'))
-                    elif n.kind=='assignment' and n.data['concurrent']:continuous.add(root_name(n.data['target']))
+                    elif n.kind=='assignment' and n.data['concurrent']:continuous.update(target_names(n.data['target']))
                 if any(count>1 or name in continuous for name,count in owners.items()):raise ParseError('multiple or mixed process drivers require manual ownership review')
-        output=VHDLGenerator().generate(neutral) if dst=='vhdl' else VerilogGenerator(dst).generate(neutral)
+        backend=VHDLGenerator() if dst=='vhdl' else VerilogGenerator(dst)
+        output=backend.generate(neutral)
         inline_diagnostics=[d for d in diagnostics if 'declaration initialization preserved:' not in d.message and 'declaration initializer omitted for child output' not in d.message]
         if inline_diagnostics:
             prefix='--' if dst=='vhdl' else '//'
@@ -104,7 +111,9 @@ def convert_text(source, *, source_language=None, target_language='systemverilog
     except (ParseError,ValueError,ZeroDivisionError) as exc:
         message=str(exc)
         match=re.search(r'line (\d+)',message)
-        diagnostics.append(Diagnostic(int(match[1]) if match else 1,message,'ERROR'))
+        line=int(match[1]) if match else getattr(backend,'source_line',1)
+        if not match and line!=1:message=f'line {line}: '+message
+        diagnostics.append(Diagnostic(line,message,'ERROR'))
         return ConversionResult(comment_draft(source,dst,message),diagnostics,complete=False)
 
 
@@ -117,16 +126,10 @@ def convert_file(input_path,output_path=None,*,source_language=None,target_langu
     if out==src:raise ValueError('output cannot overwrite source')
     if out.suffix.lower() not in (('.vhd','.vhdl') if dst=='vhdl' else (SUFFIX[dst],)):raise ValueError('output extension must match target language')
     result=convert_text(source,source_language=src_lang,target_language=dst,source_path=src,**options)
-    if strict and result.diagnostics:raise ParseError(f'{len(result.diagnostics)} warning(s); strict mode did not write output')
     # Full unsupported drafts remain reviewable through convert_text, but CLI
     # and file API never replace an existing valid output with an empty design.
-    if not result.complete or 'No complete target design emitted.' in result.text:raise ParseError(result.diagnostics[-1].message)
-    out.parent.mkdir(parents=True,exist_ok=True);temp=None
-    try:
-        with tempfile.NamedTemporaryFile('w',encoding=output_codec(output_encoding),newline='\n',dir=out.parent,delete=False) as f:
-            temp=Path(f.name);f.write(result.text)
-        os.replace(temp,out)
-    finally:
-        if temp and temp.exists():temp.unlink()
+    if not result.complete or 'No complete target design emitted.' in result.text:raise ConversionError(result.diagnostics[-1].message,result)
+    if strict and result.diagnostics:raise ConversionError(f'{len(result.diagnostics)} warning(s); strict mode did not write output',result)
+    atomic_write_text(out,result.text,output_encoding)
     result.output_path=out
     return result

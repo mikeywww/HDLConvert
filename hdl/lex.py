@@ -46,7 +46,7 @@ class ExpressionParser:
         return value
     def parse(self, minimum=0):
         value = self.pop()
-        if value in ('+', '-', '~', '!', '&', '|', '^', '~&', '~|', '~^'):
+        if value in ('+', '-', '~', '!', '&', '|', '^', '~&', '~|', '~^', '^~'):
             left = Expr('unary', value, [self.parse(12)])
         elif value == '(':
             left = self.parse(); self.pop(')')

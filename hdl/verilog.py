@@ -26,7 +26,14 @@ def root_name(e):
 
 
 def targets(nodes):
-    return {root_name(n.data['target']) for n in walk(nodes) if n.kind=='assignment'}
+    return {name for n in walk(nodes) if n.kind=='assignment' for name in target_names(n.data['target'])}
+
+
+def target_names(expression):
+    if expression.kind=='concat':
+        return {name for child in expression.args for name in target_names(child)}
+    name=root_name(expression)
+    return {name} if name else set()
 
 
 def validate_case_qualifiers(module):
@@ -234,7 +241,7 @@ class VerilogGenerator:
             for n in walk(m.statements):
                 if n.kind=='process':
                     for name in targets(n.body): owners[name].add(id(n)); procedural.add(name)
-                if n.kind=='assignment' and n.data['concurrent']: continuous.add(root_name(n.data['target']))
+                if n.kind=='assignment' and n.data['concurrent']: continuous.update(target_names(n.data['target']))
                 if n.kind=='initial':procedural.update(targets(n.body))
             procedural.update(d.name for d in m.declarations if d.type.dimensions and d.value is not None)
             self.child_outputs={name for n in walk(m.statements) if n.kind=='instance' for name in n.data.get('output_targets',[])}
