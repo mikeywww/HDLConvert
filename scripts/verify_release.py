@@ -1,6 +1,7 @@
 """Run the EXE with only Windows directories in PATH and no Python/Tcl settings."""
 from pathlib import Path
 import os
+import re
 import shutil
 import subprocess
 import struct
@@ -9,7 +10,169 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-VERSION = '2.0.7'
+VERSION = '2.0.8'
+
+
+def verify_stage32(folder,run):
+    """Check the frozen directive repair without rerunning unrelated conversions."""
+    from hdl.parser import Parser
+    from hdl.verilog import walk, width_of
+
+    expected=[('first','1ns/1ps'),('second','10ns/100ps'),
+              ('inherited','10ns/100ps')]
+
+    def checked_modules(output,language):
+        text=output.read_text(encoding='gb2312')
+        parsed=Parser(text,language).parse()
+        actual=[(m.name,m.timescale) for m in parsed.modules]
+        if actual!=expected:
+            raise RuntimeError('frozen Stage 32 module timescales differ: '+repr(actual)+'\n'+text)
+        headers=list(re.finditer(r'(?m)^`timescale[ \t]+([^\r\n]+)',text))
+        for name,scale in expected:
+            module=re.search(r'(?m)^module[ \t]+'+re.escape(name)+r'\b',text)
+            preceding=[d for d in headers if module and d.start()<module.start()]
+            if not preceding or re.sub(r'\s+','',preceding[-1].group(1))!=scale:
+                raise RuntimeError('frozen Stage 32 real timescale missing before module '+name+'\n'+text)
+        if 'No complete target design emitted.' in text:
+            raise RuntimeError('frozen Stage 32 emitted a diagnostic draft')
+        return text
+
+    source=folder/'时标 process 输入.sv'
+    code='''// UTF-8 BOM and CRLF input
+`timescale 1ns / 1ps
+module first(input logic clk, input logic process, input logic d, output logic q);
+always_ff @(posedge clk) begin
+    if (process) begin q <= d; end
+    if (d) begin q <= 1'b0; end
+end
+endmodule
+`timescale 10ns/100ps
+module second(input logic d, output logic q);
+assign q = d;
+endmodule
+module inherited(input logic d, output logic q);
+assign q = d;
+endmodule
+'''
+    source.write_bytes(('\ufeff'+code.replace('\n','\r\n')).encode('utf-8'))
+    classic=folder/'时标 输出.v'
+    modern=folder/'时标 往返.sv'
+    run([source,'--target','verilog','-o',classic])
+    text=checked_modules(classic,'verilog')
+    if 'output reg q' not in text or 'always_ff' in text:
+        raise RuntimeError('frozen Stage 32 SV-to-Verilog declaration/process lowering failed\n'+text)
+    run([classic,'--target','systemverilog','-o',modern])
+    checked_modules(modern,'systemverilog')
+
+    fragment=folder/'timescale fragment.sv'
+    fragment.write_text("`timescale 1ns/1ps\nlogic[7:0]q,d; if(process)q<='0;else q<=d;",encoding='utf-8')
+    fragment_v=fragment.with_suffix('.v')
+    fragment_sv=folder/'timescale fragment back.sv'
+    run([fragment,'--target','verilog','-o',fragment_v])
+    run([fragment_v,'--target','systemverilog','-o',fragment_sv])
+    for output in (fragment_v,fragment_sv):
+        text=output.read_text(encoding='gb2312')
+        if not re.match(r'`timescale[ \t]+1ns[ \t]*/[ \t]*1ps\r?\n',text):
+            raise RuntimeError('frozen Stage 32 fragment timescale prefix missing\n'+text)
+        if "q <= 8'b0;" not in text or 'module ' in text or 'hdl_fragment_' in text:
+            raise RuntimeError('frozen Stage 32 typed fragment gained a frame or lost literal width\n'+text)
+
+    for name,header in [('invalid scale','`timescale 1ns/100ns'),
+                        ('unknown macro','`timescale 1ns/1ps\n`define WIDTH 8')]:
+        bad=folder/(name+'.sv');output=bad.with_suffix('.v')
+        bad.write_text(header+'\nmodule m();endmodule\n',encoding='utf-8')
+        original=b'// keep existing valid output\nmodule old();endmodule\n'
+        output.write_bytes(original)
+        run([bad,'--target','verilog','-o',output],expected=1)
+        if output.read_bytes()!=original:
+            raise RuntimeError('frozen Stage 32 preprocessing failure overwrote old output: '+name)
+
+    user_source=folder/'用户 aurora_packet_bridge.sv'
+    shutil.copy2(ROOT/'tests/sv/aurora_packet_bridge.sv',user_source)
+    user_output=folder/'用户 aurora_packet_bridge.v'
+    run([user_source,'--target','verilog','-o',user_output])
+    user_text=user_output.read_text(encoding='gb2312')
+    user_design=Parser(user_text,'verilog').parse()
+    if len(user_design.modules)!=1 or user_design.modules[0].name!='aurora_packet_bridge':
+        raise RuntimeError('frozen Stage 32 user bridge module missing')
+    user_module=user_design.modules[0]
+    if user_module.timescale!='1ns/1ps':
+        raise RuntimeError('frozen Stage 32 user bridge timescale changed')
+    parameters={d.name:d for d in user_module.parameters}
+    for name in ('DATA_WIDTH','KEEP_WIDTH','PACKET_WORDS','PACKETS_PER_FRAME',
+                 'BANK_ADDR_WIDTH','RAM_ADDR_WIDTH'):
+        if name not in parameters or parameters[name].type.signed or width_of(parameters[name].type)!='32':
+            raise RuntimeError('frozen Stage 32 user bridge unsigned parameter type lost: '+name)
+    ports={d.name:d for d in user_module.ports}
+    if not ports['s_axi_tx_tdata'].net or ports['ram_wr_en'].net:
+        raise RuntimeError('frozen Stage 32 user bridge wire/reg output ownership changed')
+    if re.search(r'\b(?:always_ff|always_comb|unique|unique0|priority)\b',user_text):
+        raise RuntimeError('frozen Stage 32 user bridge retained unsupported Verilog keywords')
+    if 'No complete target design emitted.' in user_text or not any(
+            n.kind=='case' for n in walk(user_module.statements)):
+        raise RuntimeError('frozen Stage 32 user bridge FSM was not emitted')
+
+    unsigned=folder/'unsigned high bit.sv'
+    unsigned.write_text('''`timescale 1ns/1ps
+module unsigned_m #(parameter int unsigned P=32'h80000000)
+    (input logic clk, output logic negative, output logic[31:0] shifted);
+localparam int unsigned L=P;
+int unsigned x;
+always_ff @(posedge clk) x<=L;
+assign negative=(P<0);
+assign shifted=P>>>1;
+endmodule
+''',encoding='utf-8')
+    unsigned_v=unsigned.with_suffix('.v');unsigned_back=folder/'unsigned high bit back.sv'
+    run([unsigned,'--target','verilog','-o',unsigned_v])
+    run([unsigned_v,'--target','systemverilog','-o',unsigned_back])
+    for output,language in ((unsigned_v,'verilog'),(unsigned_back,'systemverilog')):
+        module=Parser(output.read_text(encoding='gb2312'),language).parse().modules[0]
+        declarations={d.name:d for d in module.parameters+module.declarations}
+        for name in ('P','L','x'):
+            typ=declarations[name].type
+            if typ.signed or width_of(typ)!='32':
+                raise RuntimeError('frozen Stage 32 unsigned high-bit roundtrip changed '+name+' in '+language)
+        if declarations['P'].value.value.lower()!="32'h80000000":
+            raise RuntimeError('frozen Stage 32 unsigned high-bit parameter literal changed')
+
+    qualified=folder/'qualified enum case.sv'
+    qualified.write_text('''module qualified_m(input logic clk,rst,output logic q);
+typedef enum logic[1:0]{IDLE,RUN} state_t;
+state_t state;
+always_ff @(posedge clk) begin
+  if(rst)begin state<=IDLE;q<=0;end
+  else unique case(state)
+    IDLE:begin state<=RUN;q<=0;end
+    RUN:begin state<=IDLE;q<=1;end
+    default:begin state<=IDLE;q<=0;end
+  endcase
+end
+endmodule
+''',encoding='utf-8')
+    qualified_v=qualified.with_suffix('.v')
+    run([qualified,'--target','verilog','-o',qualified_v])
+    text=qualified_v.read_text(encoding='gb2312')
+    module=Parser(text,'verilog').parse().modules[0]
+    cases=[n for n in walk(module.statements) if n.kind=='case']
+    if re.search(r'\bunique\b',text) or len(cases)!=1 or not any(
+            not values for values,_ in cases[0].data['choices']):
+        raise RuntimeError('frozen Stage 32 safe enum case lowering failed')
+
+    unsafe=folder/'unsafe overlapping case.sv';protected=unsafe.with_suffix('.v')
+    unsafe.write_text('''module unsafe_m(input logic clk,input logic[1:0]s,output logic q);
+always_ff @(posedge clk) unique case(s)
+  2'd0:q<=0; 2'd0:q<=1; default:q<=0;
+endcase
+endmodule
+''',encoding='utf-8')
+    original=b'// preserve existing valid output\nmodule old();endmodule\n'
+    protected.write_bytes(original)
+    failure=run([unsafe,'--target','verilog','-o',protected],expected=1)
+    if 'cannot lower unique case safely' not in failure.stdout+failure.stderr:
+        raise RuntimeError('frozen Stage 32 unsafe case did not reach the qualifier safety check')
+    if protected.read_bytes()!=original:
+        raise RuntimeError('frozen Stage 32 unsafe unique case replaced existing output')
 
 
 def verify_stage31(folder,run):
@@ -131,8 +294,14 @@ def verify_fragments(folder,run,names=None):
     run([conflict,'--target','vhdl'],expected=1)
 
 
-def main(fragments_only=False,stage31=False):
-    image=(ROOT/'dist'/'HDLConvert.exe').read_bytes()
+def main(fragments_only=False,stage31=False,stage32=False,exe_path=None):
+    image_path=Path(exe_path).resolve() if exe_path else ROOT/'dist'/'HDLConvert.exe'
+    stage_log=(ROOT/'build'/'release-stage32.log' if stage32 else
+               ROOT/'build'/'release-stage31.log' if stage31 else None)
+    if stage_log:
+        stage_log.parent.mkdir(parents=True,exist_ok=True)
+        stage_log.write_text('Verifying HDLConvert '+VERSION+'\n',encoding='utf-8')
+    image=image_path.read_bytes()
     pe=struct.unpack_from('<I',image,0x3c)[0]
     if struct.unpack_from('<H',image,pe+24+68)[0]!=2:raise RuntimeError('EXE is not a Windows GUI subsystem executable')
     env = {k: v for k, v in os.environ.items()
@@ -142,11 +311,10 @@ def main(fragments_only=False,stage31=False):
     scratch.mkdir(parents=True, exist_ok=True)
     env['TEMP'] = env['TMP'] = str(scratch)
     log = []
-    stage_log=ROOT/'build'/'release-stage31.log' if stage31 else None
     with tempfile.TemporaryDirectory(dir=scratch, prefix='独立目录 ') as directory:
         folder = Path(directory)
         exe = folder/'HDLConvert.exe'
-        shutil.copy2(ROOT/'dist'/'HDLConvert.exe', exe)
+        shutil.copy2(image_path, exe)
 
         def run(args, expected=0):
             result = subprocess.run([str(exe), *map(str, args)], cwd=folder,
@@ -164,6 +332,12 @@ def main(fragments_only=False,stage31=False):
             raise RuntimeError('notices missing')
         if 'PASS:' not in run(['--self-test', folder]).stdout:
             raise RuntimeError('GUI diagnostic failed')
+        if stage32:
+            verify_stage32(folder,run)
+            log.append('PASS: isolated '+VERSION+' PE/version/licenses/native GUI, automatic pasted SV detection, per-module timescale preservation in SV-to-V and V-to-SV, BOM/CRLF input, typed fragment headers, actual user Aurora SV-to-V with correct output ownership, unsigned high-bit roundtrip, safe enum case lowering and preprocessing/unsafe-case output protection')
+            stage_log.write_text('\n'.join(log),encoding='utf-8')
+            print(log[-1])
+            return
         if stage31:
             verify_stage31(folder,run)
             log.append('PASS: isolated '+VERSION+' PE/version/licenses/native GUI, ignored headers, Chinese comment positions, Vivado primitive templates/ownership, GBK and GB2312, package qualification and failed-output preservation')
@@ -260,4 +434,15 @@ if __name__ == '__main__':
     modes=p.add_mutually_exclusive_group()
     modes.add_argument('--fragments-only',action='store_true',help='verify only changed fragment/GUI paths and packaging')
     modes.add_argument('--stage31',action='store_true',help='verify only ignored headers, source comments, Vivado primitives and package context in the frozen EXE')
-    args=p.parse_args();main(args.fragments_only,args.stage31)
+    modes.add_argument('--stage32',action='store_true',help='verify only timescale directives, SV detection and preprocessing-failure protection in the frozen EXE')
+    p.add_argument('--exe',type=Path,help='read-only path to the executable to verify; default: dist/HDLConvert.exe')
+    args=p.parse_args()
+    try:
+        main(args.fragments_only,args.stage31,args.stage32,args.exe)
+    except Exception as exc:
+        if args.stage32:
+            stage_log=ROOT/'build'/'release-stage32.log'
+            stage_log.parent.mkdir(parents=True,exist_ok=True)
+            with stage_log.open('a',encoding='utf-8') as output:
+                output.write('\nERROR: '+str(exc)+'\n')
+        raise

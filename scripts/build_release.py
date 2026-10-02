@@ -1,7 +1,9 @@
 """Reproducible one-file build. Run using the project build virtual environment."""
 from pathlib import Path
+import argparse
 import hashlib
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -9,7 +11,9 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def main():
+def main(name='HDLConvert'):
+    if not re.fullmatch(r'HDLConvert(?:-\d+(?:\.\d+)*)?', name):
+        raise SystemExit('Build name must be HDLConvert or HDLConvert-<version>')
     if sys.platform != 'win32' or struct.calcsize('P') != 8 or os.environ.get('PROCESSOR_ARCHITECTURE', '').upper() != 'AMD64':
         raise SystemExit('Build requires Windows x64 Python')
     import tkinter
@@ -27,7 +31,7 @@ def main():
     exclude_args = [part for name in exclusions for part in ('--exclude-module', name)]
     subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean',
         '--onefile', '--windowed', '--noupx',
-        '--optimize', '2', '--name', 'HDLConvert',
+        '--optimize', '2', '--name', name,
         '--distpath', str(ROOT/'dist'), '--workpath', str(ROOT/'build'/'pyinstaller'),
         '--specpath', str(ROOT/'build'),
         '--additional-hooks-dir', str(ROOT/'packaging'/'hooks'),
@@ -35,11 +39,13 @@ def main():
         '--add-data', str(ROOT/'THIRD_PARTY_LICENSES.txt') + ';.',
         *exclude_args,
         str(ROOT/'hdlconvert.py')], cwd=ROOT, env=env, check=True)
-    output = ROOT/'dist'/'HDLConvert.exe'
+    output = ROOT/'dist'/(name+'.exe')
     digest = hashlib.sha256(output.read_bytes()).hexdigest()
-    (ROOT/'build'/'release.sha256').write_text(f'{digest}  HDLConvert.exe\n', encoding='ascii')
+    (ROOT/'build'/'release.sha256').write_text(f'{digest}  {output.name}\n', encoding='ascii')
     print(f'{output}\nSize: {output.stat().st_size:,} bytes\nSHA256: {digest}')
 
 
 if __name__ == '__main__':
-    main()
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--name',default='HDLConvert',help='optional versioned filename when the default EXE is in use')
+    main(parser.parse_args().name)

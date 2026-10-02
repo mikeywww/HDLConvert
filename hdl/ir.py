@@ -72,6 +72,7 @@ class Module:
     comments: dict = field(default_factory=dict)
     architecture_comments: dict = field(default_factory=dict)
     enum_comments: dict = field(default_factory=dict)
+    timescale: str | None = None
 
 
 @dataclass

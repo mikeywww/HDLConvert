@@ -4,17 +4,17 @@ import re
 from hdlconvert.lexer import ParseError
 from .ir import Design, Module, Declaration, Type, Statement, Expr
 from .lex import tokenize, expression, split, literal_int
+from .preprocessor import process_timescales
 
 DIRECTIONS = {'input', 'output', 'inout'}
 TYPES = {'wire', 'reg', 'logic', 'bit', 'integer', 'int', 'signed', 'unsigned'}
+CASE_QUALIFIERS = {'unique', 'unique0', 'priority'}
 
 
 class Parser:
     def __init__(self, source, language='systemverilog'):
-        # Keep offsets/lines intact. No macro substitution: unresolved preprocessing
-        # is rejected rather than guessed. Ignore only non-semantic timescale lines.
         self.source = source
-        masked = re.sub(r'(?m)^\s*`timescale[^\n]*', lambda m: ' '*len(m[0]), source)
+        masked, self.timescales = process_timescales(source)
         self.ts = tokenize(masked); self.i = 0; self.language = language
         self.enums = {}; self.types = {}
     def peek(self, n=0): return self.ts[self.i+n].text if self.i+n < len(self.ts) else ''
@@ -26,6 +26,8 @@ class Parser:
     def accept(self, value):
         if self.peek() == value: self.pop(); return True
         return False
+    def timescale_at(self, position):
+        return next((d.value for d in reversed(self.timescales) if d.start < position), None)
     def until(self, *ends):
         start, stack = self.i, []
         pairs = {'(':')','[':']','{':'}'}
@@ -122,7 +124,8 @@ class Parser:
         design = Design(source_language=self.language, source=self.source)
         while self.peek():
             start = self.i; self.pop('module'); name = self.pop().text
-            module = Module(name); self.enums = {}; self.types = {}; self.module = module
+            module = Module(name, timescale=self.timescale_at(self.ts[start].start))
+            self.enums = {}; self.types = {}; self.module = module
             if self.accept('#'): module.parameters = self.declarations(self.group(), 'parameter')
             ports = self.group()
             ansi = bool(ports and ports[0].text in DIRECTIONS)
@@ -167,6 +170,8 @@ class Parser:
                     module.statements.insert(0,Statement('assignment',dict(target=Expr('name',decl.name),value=decl.value,op='=',concurrent=True),line=decl.line,source=decl.source))
                     decl.value=None
             module.enums = dict(self.enums); self.mark(module, start)
+            if any(self.ts[start].start <= d.start < self.ts[self.i-1].end for d in self.timescales):
+                raise ParseError(f'line {next(d.line for d in self.timescales if self.ts[start].start <= d.start < self.ts[self.i-1].end)}: timescale must be outside module declarations')
             if any(not p.direction for p in module.ports): raise ParseError('missing port direction')
             names = [d.name for d in module.parameters + module.ports + module.declarations]
             if len(names) != len(set(names)): raise ParseError('duplicate declaration')
@@ -302,7 +307,12 @@ class Parser:
         start=self.i
         self.accept('static')
         if self.peek()=='begin': return self.block()
-        if self.peek() in ('if','case','for'): node=self.control()
+        if self.peek() in CASE_QUALIFIERS:
+            qualifier=self.pop().text
+            if self.peek()!='case':
+                raise ParseError(f'line {self.ts[start].line}: {qualifier} is supported only on case statements')
+            node=self.control();node.data['qualifier']=qualifier
+        elif self.peek() in ('if','case','for'): node=self.control()
         elif self.accept(';'): return []
         elif self.accept('return'):
             node=Statement('return',dict(value=expression(self.until(';'))));self.pop(';')
@@ -326,7 +336,10 @@ class Parser:
                 if self.accept('default'): values=[]; self.accept(':')
                 else: values=[expression(p) for p in split(self.until(':'))]; self.pop(':')
                 choices.append((values,self.statement()))
-            self.pop('endcase'); node=Statement('case',dict(expression=selector,choices=choices))
+            self.pop('endcase')
+            if sum(not values for values,_ in choices)>1:
+                raise ParseError(f'line {self.ts[start].line}: duplicate case default')
+            node=Statement('case',dict(expression=selector,choices=choices))
         else:
             parts=split(self.group(),';')
             if len(parts)!=3: raise ParseError('for requires init; condition; update')

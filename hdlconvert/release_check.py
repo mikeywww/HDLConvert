@@ -34,6 +34,15 @@ def run(directory):
             if app.busy or 'rising_edge' not in app.output.get():
                 raise RuntimeError('editor worker conversion failed')
             app.clear()
+            app.source.set("`timescale 1ns/1ps\nmodule smoke(input logic clk,process,d,output logic q);\n"
+                           "always_ff @(posedge clk) begin if(process) begin q<=d; end\n"
+                           "if(d) q<=1'b0; end endmodule")
+            app.source_language.set('自动检测');app.target_language.set('Verilog');app.convert()
+            deadline=time.monotonic()+15
+            while app.busy and time.monotonic()<deadline:root.update();time.sleep(.02)
+            if app.busy or not app.output_complete or '`timescale 1ns/1ps' not in app.output.get() or 'output reg q' not in app.output.get():
+                raise RuntimeError('GUI automatic timescale SV-to-Verilog conversion failed')
+            app.clear()
             app.source.set("case sel is when 0=>if en='1' then q<='1';else q<='0';end if;when others=>q<='0';end case;")
             app.source_language.set('自动检测');app.target_language.set('Verilog');app.fragment_context.set('组合过程内');app.convert()
             deadline=time.monotonic()+15
@@ -54,6 +63,6 @@ def run(directory):
             app.output.set('previous result');app.output_complete=True;app.busy=True
             app.events.put(('error','test worker exception','systemverilog'));app.poll()
             if app.output_complete or app.output.get():raise RuntimeError('worker exception left a saveable stale result')
-        print('PASS: Chinese GUI, GB2312 output, bundled Tk/tkdnd, Unicode drop, GBK decoding, fragment context/editor conversion and incomplete/stale-result save refusal')
+        print('PASS: Chinese GUI, GB2312 output, bundled Tk/tkdnd, Unicode drop, GBK decoding, automatic timescale SV-to-Verilog, fragment context/editor conversion and incomplete/stale-result save refusal')
     finally:
         root.destroy()

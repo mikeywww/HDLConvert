@@ -97,6 +97,12 @@ Vivado 原语使用依据 [AMD UG953](https://docs.amd.com/r/2025.2-English/ug95
 
 Verilog/SV 路径支持 DDR3 示例生成结果中的 function、固定数组、packed struct 和局部静态变量。完整 case 译码在 Verilog 中使用连续函数调用，保留启动时求值。跨语言互转仅对受支持的 RTL 子集保留功能，不承诺任意 SV 语法、注释或格式无损。运行时二值 `bit` 存储、复杂静态函数状态等结构会明确拒绝。
 
+Verilog/SV 的合法 `` `timescale `` 指令按模块保留，包括多个模块使用不同时间尺度及后续模块继承当前设置的情况。代码段的单独头部指令也保留，粘贴到工程时应放在 module 外部。自动识别优先检查 module 等设计结构，不会因为 SV 的 `process` 信号名或相邻 `end`、`if` 误走 VHDL 解析器。注释/字符串内的指令文本不参与解析。不完整指令、未知宏/条件预处理仍会明确拒绝；本工具不展开完整预处理宏。
+
+SV 的 `int unsigned` 在 Verilog 中保留为无符号 32 位 parameter、reg 或 wire，保持高位比较和右移行为。`unique` / `unique0` / `priority case` 在 SV 输出中保留；转 Verilog 时，仅在可证明限定条件不改变综合行为时降为普通 case：unique 要求显式 default 和互斥的固定枚举/数值标签，unique0 可省略 default，priority 要求 default。参数相关、重叠或无法证明的 unique 标签明确拒绝；带限定符的 if 暂不支持。
+
+无分支、无自身或向后依赖的 `always_comb` 整信号赋值链可转换为连续 assign，保留启动时求值和顺序依赖。目标带初始化、存在多个过程驱动或缺少类型证据时不使用这一降低方式；复杂组合调度仍需按支持边界检查。
+
 ## 部分代码段
 
 可直接粘贴完整的 `case`、嵌套 `if/elsif/else`、循环、多条赋值，或一个/多个 `process`，无需补 entity/architecture。输出保留代码段结构，不生成临时 module、虚构时钟或外部信号声明。
@@ -129,7 +135,7 @@ end case;
 
 Verilog/SV 的 case/if/assign/always 片段可互转；转 VHDL 时需附上所用信号声明。裸阻塞赋值不能可靠映射为 VHDL 信号赋值，应提供完整 always 块以保留变量执行顺序。依赖生成辅助函数、复杂数组或缺失类型上下文的反向片段要求提供完整 module。VHDL 目标片段需放入已有 `std_logic_1164` / `numeric_std` 环境。
 
-完整组合过程在 Verilog 中还涉及启动时求值：已声明类型的完整 case 译码通过连续函数调用保留该行为。其余 `always_comb` 或 VHDL 组合 process 片段转 Verilog 时保守拒绝，可保留 SV，或只转换裸语句并按原工程语义放入已有过程。
+完整组合过程在 Verilog 中还涉及启动时求值：已声明类型的完整 case 译码通过连续函数调用保留该行为，符合上述条件的直线赋值链使用连续 assign。其余 `always_comb` 或 VHDL 组合 process 片段转 Verilog 时保守拒绝，可保留 SV，或只转换裸语句并按原工程语义放入已有过程。
 
 ```powershell
 python hdlconvert.py fragment.vhd -o fragment.v --fragment-context clocked

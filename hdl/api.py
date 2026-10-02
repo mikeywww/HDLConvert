@@ -15,7 +15,7 @@ from hdlconvert.parser import Parser as VHDLParser
 from hdlconvert.generator import Generator as LegacyGenerator
 from hdlconvert.encoding import read_source, output_codec
 from .parser import Parser
-from .verilog import VerilogGenerator, walk, targets, root_name
+from .verilog import VerilogGenerator, walk, targets, root_name, validate_case_qualifiers
 from .vhdl import VHDLGenerator
 
 LANGUAGES=('vhdl','verilog','systemverilog')
@@ -32,8 +32,16 @@ def detect_language(source='',path=None):
     suffix=Path(path).suffix.lower() if path else ''
     known={'.vhd':'vhdl','.vhdl':'vhdl','.v':'verilog','.sv':'systemverilog'}
     if suffix in known:return known[suffix]
-    stripped=re.sub(r'//[^\n]*|/\*[\s\S]*?\*/|--[^\n]*','',source)
-    if re.search(r"\b(entity|architecture|std_logic|process|then|elsif|downto)\b|\bend\s+(if|case|loop)\b|:=|'[01]'",stripped,re.I):return 'vhdl'
+    # Quoted attributes/strings and comments are not language evidence. Strong
+    # complete-design markers win over weak words such as a signal named process
+    # or adjacent SV "end" and "if" statements.
+    stripped=re.sub(r'//[^\n]*|/\*[\s\S]*?\*/|--[^\n]*|"(?:\\.|""|[^"\\])*"',
+                    lambda m: ''.join('\n' if c=='\n' else ' ' for c in m.group()),source)
+    if re.search(r'\b(?:entity\s+\w+\s+is|architecture\s+\w+\s+of|package\s+(?:body\s+)?\w+\s+is)\b',stripped,re.I):
+        return 'vhdl'
+    if re.search(r'\bmodule\s+(?:\\\S+|[$a-zA-Z_][$\w]*)\s*(?:[#(;])|`timescale\b',stripped):
+        return 'systemverilog' if re.search(r'\b(logic|always_ff|always_comb|typedef)\b',stripped) else 'verilog'
+    if re.search(r"\b(entity|architecture|std_logic|process|then|elsif|downto)\b|\bend\s+(if|case|loop)\s*;|:=|'[01]'",stripped,re.I):return 'vhdl'
     if re.search(r'\b(logic|always_ff|always_comb|typedef)\b',stripped):return 'systemverilog'
     if re.search(r"\b(module|assign|always|wire|reg|endcase|begin)\b|\b(if|case)\s*\(|\d+'[sS]?[bBdDhHoO]",stripped):return 'verilog'
     raise ValueError('Cannot identify HDL language; select Source manually')
@@ -78,6 +86,7 @@ def convert_text(source, *, source_language=None, target_language='systemverilog
                 if not neutral.modules:raise ParseError('top module not found: '+top)
         if dst=='vhdl':
             for module in neutral.modules:
+                validate_case_qualifiers(module)
                 owners={}; continuous=set()
                 for n in walk(module.statements):
                     if n.kind=='process':

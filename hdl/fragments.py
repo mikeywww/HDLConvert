@@ -71,18 +71,19 @@ class FamilyFragmentGenerator(VerilogGenerator):
 
 def module_body(output):
     """Remove only the generated module frame using balanced tokens."""
-    ts=tokenize(output);start=next(i for i,t in enumerate(ts) if t.text=='module')
+    parsed=Parser(output);ts=parsed.ts;start=next(i for i,t in enumerate(ts) if t.text=='module')
     depth=0
     for t in ts[start+1:]:
         depth+=(t.text in ('(','[','{'))-(t.text in (')',']','}'))
         if t.text==';' and depth==0:
             end=next(x.start for x in reversed(ts) if x.text=='endmodule')
-            return dedent(output[t.end:end]).strip()+'\n'
+            scale=parsed.timescale_at(ts[start].start)
+            return ('`timescale '+scale+'\n' if scale else '')+dedent(output[t.end:end]).strip()+'\n'
     raise ParseError('fragment frame has no module body')
 
 
 def unwrap_process(output,label):
-    ts=tokenize(output)
+    ts=Parser(output).ts
     marker=next((i for i in range(len(ts)-2) if [t.text for t in ts[i:i+3]]==['begin',':',label]),None)
     if marker is None:raise ParseError('fragment process boundary was lost')
     start=next(i for i in range(marker,-1,-1) if ts[i].text in ('always','always_ff','always_comb'))
@@ -216,7 +217,9 @@ def expression_names(e):
 def family_fragment(source,language,target,context):
     p=Parser(source,language)
     if not p.ts or p.peek()=='module':return None
-    m=Module('hdl_fragment_temp');p.module=m
+    if any(d.start > p.ts[0].start for d in p.timescales):
+        raise ParseError('timescale in a code fragment must precede its declarations/statements')
+    m=Module('hdl_fragment_temp',timescale=p.timescale_at(p.ts[0].start));p.module=m
     while p.peek() in TYPES|{'parameter','localparam','typedef'} or p.peek() in p.enums or p.peek() in p.types:
         if p.peek()=='typedef':p.typedef(m)
         else:m.declarations+=p.declarations(p.until(';'));p.pop(';')
