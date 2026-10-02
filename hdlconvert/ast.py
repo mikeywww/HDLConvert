@@ -28,6 +28,9 @@ class Node:
     name: str = ''
     data: dict = field(default_factory=dict)
     children: list = field(default_factory=list)
+    source_start: int = -1
+    source_end: int = -1
+    comments: dict = field(default_factory=dict)
 
 
 # Declarations/statements share a compact container; kind is the visitor tag.
@@ -39,6 +42,7 @@ class Node:
 @dataclass
 class Design:
     units: list[Node]
+    comments_tail: list = field(default_factory=list)
 
 
 @dataclass

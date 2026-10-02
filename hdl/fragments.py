@@ -105,7 +105,8 @@ def unique_name(names,base):
 
 def vhdl_fragment(source,target,context):
     p=VParser(source)
-    if not p.tokens or p.peek() in ('library','use','entity','architecture','package','configuration'):
+    header_imports=p.context_clauses();body_start=p.i
+    if not p.peek() or p.peek() in ('entity','architecture','package','configuration'):
         return None
     decl=p.declarations(fragment=True);p.accept('begin')
     nodes=p.statements(stops=(),concurrent=True)
@@ -129,7 +130,7 @@ def vhdl_fragment(source,target,context):
     # as per-call body assignments by prepare, so they remain live here.
     dropped={t.start for n in decl+[d for node in vwalk(nodes) for d in node.data.get('decl',[])]
         if n.kind in ('signal','variable') for t in n.data.get('value',[])}
-    tokens=[t for t in p.tokens if t.start not in dropped]
+    tokens=[t for t in p.tokens[body_start:] if t.start not in dropped]
     names={}
     for i,t in enumerate(tokens):
         if t.text.isidentifier() and t.lower not in reserved and (i==0 or tokens[i-1].text!='.'):
@@ -161,25 +162,34 @@ def vhdl_fragment(source,target,context):
         refs=n.data.get('type');ranges=(refs.ranges if refs else [])+n.data.get('ranges',[])
         if any(t.lower in names for r in ranges for t in r.left+r.right):
             raise ParseError('fragment range bounds need constant/type declarations')
-    arch=Node('architecture',data={'entity':'hdl_fragment_temp','decl':external+decl,'imports':[]},children=nodes)
+    arch=Node('architecture',data={'entity':'hdl_fragment_temp','decl':external+decl,'imports':header_imports},children=nodes)
     entity=Node('entity',name='hdl_fragment_temp',data={'imports':[]})
-    prepare(VDesign([entity,arch]))
+    from hdlconvert.comments import attach_comments
+    design=attach_comments(VDesign([entity,arch]),source)
+    prepare(design)
     owner_nodes=nodes if mode=='concurrent' else [Node('process',data={'decl':[]},children=nodes)]
     check=deepcopy(arch);check.children=owner_nodes;validate_drivers(check,{})
     g=FragmentGenerator();g.symbols=Symbols()
+    g.symbols.unsigned_arithmetic=arch.data.get('unsigned_arithmetic',False)
     declarations=g.declarations(arch.data['decl'])
     if mode=='comb':g.process(Node('process',data={'sensitivity':vtokens('all'),'decl':[]},children=nodes))
     if g.incomplete:raise ParseError(str(g.diagnostics[-1]))
     if target=='systemverilog':
-        output='\n'.join(declarations+g.statements(nodes,mode))+'\n'
+        output='\n'.join(declarations+g.statements(nodes,mode)+design.comments_tail)+'\n'
     elif target=='verilog':
         adapter=FragmentAdapter();adapter.g=FragmentGenerator();adapter.g.symbols=Symbols()
+        adapter.g.symbols.unsigned_arithmetic=arch.data.get('unsigned_arithmetic',False)
+        adapter.interfaces={d.name.lower():[(p.name.lower(),p.data.get('direction','in')) for p in d.children if p.kind=='port'] for d in arch.data['decl'] if d.kind=='component'}
         m=Module('hdl_fragment_temp')
         for n in arch.data['decl']:
             d=adapter.declaration(n)
             if d:m.declarations.append(d)
-        m.enums=dict(adapter.enums);m.external_symbols={spelling:Type('external') for spelling in names.values()}
+        m.enums=dict(adapter.enums);m.enum_comments=dict(adapter.enum_comments)
+        m.external_symbols={spelling:Type('external') for spelling in names.values()}
         body=adapter.statements(nodes,mode);m.functions=list(adapter.functions)
+        if adapter.pending_comments:
+            body.insert(0,Statement('comment',dict(lines=['//'+text for text in adapter.pending_comments])))
+            adapter.pending_comments=[]
         if adapter.g.incomplete:raise ParseError(str(adapter.g.diagnostics[-1]))
         label=unique_name(reserved|set(names),'hdl_fragment_body')
         if mode!='concurrent':
@@ -187,6 +197,7 @@ def vhdl_fragment(source,target,context):
         m.statements=body
         output=module_body(FamilyFragmentGenerator(target).generate(Design([m])))
         if mode!='concurrent':output=unwrap_process(output,label)
+        if design.comments_tail:output+='\n'.join(design.comments_tail)+'\n'
     else:raise ParseError('same-language VHDL fragment is not a conversion direction')
     if g.incomplete:raise ParseError(str(g.diagnostics[-1]))
     return result(output,names,mode)

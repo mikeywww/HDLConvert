@@ -4,6 +4,7 @@ from dataclasses import replace
 from .ir import Expr, Type, Statement, Declaration
 from .lex import literal_int
 from hdlconvert.lexer import ParseError
+from hdlconvert.comments import decorate, closing, interface, lines as comment_lines
 
 
 def children(n):
@@ -190,18 +191,24 @@ class VerilogGenerator:
             port_names=set().union(*(names(e) for d in m.ports for e in (list(d.type.bounds or ()) + [e for pair in d.type.dimensions for e in pair])))
             nonansi=self.target=='verilog' and bool(constants & (port_names|set().union(*(names(d.value) for d in m.parameters))))
             if nonansi:
-                out+=[header+' ('+', '.join(d.name for d in m.ports)+');']
-                out+=self.indent([self.declaration(d,procedural)+';' for d in m.declarations if d.kind=='localparam'])
-                out+=self.indent([self.declaration(d,procedural)+';' for d in m.parameters+m.ports])
+                out+=decorate([header+' ('+', '.join(d.name for d in m.ports)+');'],m)
+                for d in m.declarations:
+                    if d.kind=='localparam':out+=self.indent(decorate([self.declaration(d,procedural)+';'],d))
+                for d in m.parameters+m.ports:out+=self.indent(decorate([self.declaration(d,procedural)+';'],d))
+                out+=self.indent(decorate([],m,'close'))
             else:
-                if m.parameters: header+=' #(\n'+',\n'.join(self.indent([self.declaration(d,procedural) for d in m.parameters]))+'\n)'
-                out += [header+' (']+self.indent([',\n    '.join(self.declaration(d,procedural) for d in m.ports)])+[');']
+                out+=decorate([header+(' #(' if m.parameters else ' (')],m)
+                if m.parameters:
+                    out+=self.indent(interface([self.declaration(d,procedural) for d in m.parameters],m.parameters))+[') (']
+                out+=self.indent(interface([self.declaration(d,procedural) for d in m.ports],m.ports))+decorate([');'],m,'close')
+            out+=self.indent(decorate([],m.architecture_comments))
             for name,(t,values) in m.enums.items():
                 if self.target=='systemverilog':
-                    out += self.indent(['typedef enum '+self.typ(t,'logic')+' {'+', '.join(n+' = '+self.expr(e) for n,e in values)+'} '+name+';'])
+                    out += self.indent(decorate(['typedef enum '+self.typ(t,'logic')+' {'+', '.join(n+' = '+self.expr(e) for n,e in values)+'} '+name+';'],m.enum_comments.get(name,{})))
                 else:
-                    out += self.indent(['localparam '+self.typ(t,'').strip()+' '+n+' = '+self.expr(e,width_of(t))+';' for n,e in values])
-            out+=self.indent([self.declaration(d,procedural)+';' for d in m.declarations if not (nonansi and d.kind=='localparam')])
+                    out += self.indent(decorate(['localparam '+self.typ(t,'').strip()+' '+n+' = '+self.expr(e,width_of(t))+';' for n,e in values],m.enum_comments.get(name,{})))
+            for d in m.declarations:
+                if not (nonansi and d.kind=='localparam'):out+=self.indent(decorate([self.declaration(d,procedural)+';'],d))
             for idx,d in enumerate(m.declarations):
                 if not d.type.dimensions or d.value is None:continue
                 element=replace(d.type,dimensions=[])
@@ -220,23 +227,23 @@ class VerilogGenerator:
                 self.symbols[fn['name']]=fn['type']
                 ret=self.typ(fn['type'],'').strip() or ''
                 automatic=fn.get('automatic',True)
-                out+=self.indent([f'function {"automatic " if automatic else ""}{ret} {fn["name"]};'])
-                out+=self.indent(self.indent(['input '+self.typ(a.type,'').strip()+' '+a.name+';' for a in fn['args']]))
-                out+=self.indent(self.indent([self.typ(d.type,'reg' if self.target=='verilog' else 'logic')+' '+d.name+self.dimensions(d.type)+(' = '+self.expr(d.value,width_of(d.type)) if d.value and not automatic else '')+';' for d in fn['locals']]))
+                out+=self.indent(decorate([f'function {"automatic " if automatic else ""}{ret} {fn["name"]};'],fn.get('comments',{})))
+                for a in fn['args']:out+=self.indent(self.indent(decorate(['input '+self.typ(a.type,'').strip()+' '+a.name+';'],a)))
+                for d in fn['locals']:out+=self.indent(self.indent(decorate([self.typ(d.type,'reg' if self.target=='verilog' else 'logic')+' '+d.name+self.dimensions(d.type)+(' = '+self.expr(d.value,width_of(d.type)) if d.value and not automatic else '')+';'],d)))
                 initial=[Statement('assignment',dict(target=Expr('name',d.name),value=d.value,op='=',concurrent=False)) for d in fn['locals'] if d.value and automatic]
                 self.active_function=fn['name']
                 self.function_exit='hdl_return_'+fn['name']
                 if self.function_exit in self.symbols:raise ParseError('function return label collision')
-                body=self.statements(initial+fn['body'],'function')
+                body=comment_lines(fn.get('comments',{}),'body')+comment_lines(fn.get('comments',{}),'body','inline')+self.statements(initial+fn['body'],'function')
                 if self.target=='verilog':body=['begin : '+self.function_exit]+self.indent(body)+['end']
                 out+=self.indent(self.indent(body))
-                out+=self.indent(['endfunction'])
+                out+=self.indent(decorate(['endfunction'],fn.get('comments',{}),'close'))
                 self.symbols=old_symbols
-            out+=self.indent(self.statements(m.statements))
+            out+=self.indent(comment_lines(m.architecture_comments,'body')+comment_lines(m.architecture_comments,'body','inline')+self.statements(m.statements))
             for width,name in self.cast_helpers.items():
                 out+=self.indent([f'function [({width})-1:0] {name};', f'    input [({width})-1:0] value;', f'    begin {name} = value; end', 'endfunction'])
-            out+=['endmodule','']
-        return '\n'.join(out)+'\n'
+            out+=decorate(['endmodule'],m.architecture_comments,'close')+['']
+        return '\n'.join(out+design.comments_tail)+'\n'
     def lower_comb_cases(self,nodes,functions):
         """Continuous function for full case decoders, including time zero."""
         def flat(body):
@@ -255,8 +262,8 @@ class VerilogGenerator:
                         args=[Declaration('sel',self.expr_type(sel),'port','input')];actuals=[sel];branches=[]
                         for i,(values,branch) in enumerate(choices):
                             arg='value_'+str(i);args.append(Declaration(arg,typ,'port','input'));actuals.append(branch[0].data['value'])
-                            branches.append((values,[Statement('assignment',dict(target=Expr('name',name),value=Expr('name',arg),op='=',concurrent=False))]))
-                        functions.append(dict(name=name,type=typ,args=args,locals=[],automatic=True,body=[Statement('case',dict(expression=Expr('name','sel'),choices=branches))]))
+                            branches.append((values,[Statement('assignment',dict(target=Expr('name',name),value=Expr('name',arg),op='=',concurrent=False),comments=branch[0].comments)]))
+                        functions.append(dict(name=name,type=typ,args=args,locals=[],automatic=True,comments=n.comments,body=[Statement('case',dict(expression=Expr('name','sel'),choices=branches),comments=case.comments)]))
                         result.append(Statement('assignment',dict(target=target,value=Expr('call',name,actuals),op='=',concurrent=True)))
                         continue
             result.append(n)
@@ -303,6 +310,7 @@ class VerilogGenerator:
         out=[]
         for n in nodes:
             d=n.data;k=n.kind
+            begin=len(out)
             if self.target=='verilog' and context=='concurrent' and k in ('for','if') and d.get('generate'):
                 out+=['generate']+self.indent(self.statements([n],'generate'))+['endgenerate'];continue
             if k=='assignment':
@@ -332,15 +340,18 @@ class VerilogGenerator:
                     sensitivity=' @('+(' or '.join(edge+' '+name for edge,name in events) if events else ('*' if not d['sensitivity'] or d['sensitivity']==['*'] else ' or '.join(d['sensitivity'])))+')'
                 self.block_serial+=1
                 label=n.label or ('hdl_process_'+str(self.block_serial) if self.target=='verilog' else '')
-                out += [flavor+sensitivity+' begin'+(' : '+label if label else '')]+self.indent(self.statements(n.body,'process'))+['end']
+                body=comment_lines(n,'body')+comment_lines(n,'body','inline')+self.statements(n.body,'process')
+                out += [flavor+sensitivity+' begin'+(' : '+label if label else '')]+self.indent(body)+['end']
             elif k=='initial':out+=['initial']+self.statements(n.body,'process')
             elif k=='if':
                 out+=['if ('+self.expr(d['condition'])+') begin']+self.indent(self.statements(n.body,context))+['end']
-                if d['otherwise']: out[-1]+=' else begin'; out+=self.indent(self.statements(d['otherwise'],context))+['end']
+                if d['otherwise']:
+                    out[-1:] = decorate([out[-1]+' else begin'],{'main':d.get('else_comments',{})})
+                    out+=self.indent(self.statements(d['otherwise'],context))+['end']
             elif k=='case':
                 out+=['case ('+self.expr(d['expression'])+')']
-                for values,body in d['choices']:
-                    out+=self.indent([(', '.join(self.expr(e) for e in values) if values else 'default')+': begin']+self.indent(self.statements(body,context))+['end'])
+                for index,(values,body) in enumerate(d['choices']):
+                    out+=self.indent(decorate([(', '.join(self.expr(e) for e in values) if values else 'default')+': begin'],n,'choice_'+str(index))+self.indent(self.statements(body,context))+['end'])
                 out+=['endcase']
             elif k=='for':
                 name=d['name']; generate=d['generate']
@@ -364,7 +375,7 @@ class VerilogGenerator:
             elif k=='declaration':
                 for decl in d['declarations']:
                     self.symbols[decl.name]=decl.type
-                    out.append(self.typ(decl.type,'reg' if self.target=='verilog' else 'logic')+' '+decl.name+self.dimensions(decl.type)+(' = '+self.expr(decl.value,width_of(decl.type)) if decl.value else '')+';')
+                    out+=decorate([self.typ(decl.type,'reg' if self.target=='verilog' else 'logic')+' '+decl.name+self.dimensions(decl.type)+(' = '+self.expr(decl.value,width_of(decl.type)) if decl.value else '')+';'],decl)
             elif k=='return':
                 if context!='function':raise ParseError('return outside function')
                 if self.target=='systemverilog':out.append('return '+self.expr(d['value'])+';')
@@ -375,5 +386,9 @@ class VerilogGenerator:
             elif k=='disable':
                 if context!='function':raise ParseError('disable outside function requires control-flow lowering')
                 out.append('disable '+d['label']+';')
+            elif k=='comment':out+=d['lines']
             else: raise ParseError('unsupported statement '+k)
+            rendered=out[begin:]
+            if k in ('block','process','if','case','for','while','generate'):rendered=closing(rendered,n)
+            out[begin:]=decorate(rendered,n)
         return out

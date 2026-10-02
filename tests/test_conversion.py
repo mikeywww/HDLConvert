@@ -72,7 +72,7 @@ class ConversionTests(unittest.TestCase):
           end package;
           package body utils is function plus_one(x: integer) return integer is begin return x+1; end function; end package body;''')
         self.assertIn('typedef struct packed', text)
-        self.assertIn('function automatic int plus_one(input int x)', text)
+        self.assertRegex(text, r'function automatic int plus_one\(\s*input int x\s*\)')
 
     def test_with_select_conditional(self):
         self.clean(unit(body="q <= d when rst='0' else '0';"))

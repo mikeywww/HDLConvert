@@ -76,7 +76,7 @@ class Parser:
     def node(self, kind, start, name='', data=None, children=None):
         first = self.tokens[start]
         return Node(kind, first.line, self.source[first.start:self.tokens[self.i-1].end],
-                    name, data or {}, children or [])
+                    name, data or {}, children or [],source_start=first.start,source_end=self.tokens[self.i-1].end)
 
     def finish(self, kind, name=''):
         self.pop('end')
@@ -108,7 +108,8 @@ class Parser:
                     raise ParseError('invalid declaration name')
                 result.append(Node(kind, part[0].line, words(part), n[0].text,
                                    {'type': typ, 'direction': direction,
-                                    'value': value[1] if len(value) == 2 else []}))
+                                    'value': value[1] if len(value) == 2 else []},
+                                    source_start=part[0].start,source_end=part[-1].end))
         return result
 
     def declarations(self, stop='begin', fragment=False):
@@ -302,6 +303,23 @@ class Parser:
                         result.append(self.node('unsupported', start, label, {'reason': 'unsupported statement'}))
         return result
 
+    def context_clause(self,tag):
+        """Consume library text; retain only metadata needed by RTL semantics."""
+        ts=self.until(';');self.pop(';')
+        if tag!='use':return []
+        raw=[t.lower for t in ts]
+        if raw==['ieee','.','std_logic_unsigned','.','all']:
+            return ['__hdl_unsigned_arithmetic']
+        if len(ts)==5 and raw[0]=='work' and raw[1]==raw[3]=='.' and raw[-1]=='all':
+            return [ts[2].text]
+        return []
+
+    def context_clauses(self):
+        imports=[]
+        while self.peek() in ('library','use'):
+            imports+=self.context_clause(self.pop().lower)
+        return imports
+
     def parse(self):
         units, imports = [], []
         for line, text in enumerate(self.source.splitlines(), 1):
@@ -310,17 +328,7 @@ class Parser:
         while self.peek():
             start, tag = self.i, self.pop().lower
             if tag in ('library', 'use'):
-                ts = self.until(';')
-                self.pop(';')
-                if tag == 'use':
-                    if len(ts) == 5 and ts[0].lower == 'work' and ts[-1].lower == 'all':
-                        imports.append(ts[2].text)
-                    elif [t.lower for t in ts]==['ieee','.','std_logic_unsigned','.','all']:
-                        imports.append('__hdl_unsigned_arithmetic')
-                    elif [t.lower for t in ts]==['unisim','.','vcomponents','.','all']:
-                        units.append(self.node('vendor_import',start,data={'library':'unisim'}))
-                    elif not (ts and ts[0].lower == 'ieee' and len(ts) >= 3 and ts[2].lower in ('std_logic_1164', 'numeric_std','std_logic_unsigned','std_logic_arith')):
-                        units.append(self.node('unsupported', start, data={'reason': 'unsupported library import'}))
+                imports+=self.context_clause(tag)
             elif tag == 'entity':
                 name = self.pop().text
                 self.pop('is')
@@ -360,4 +368,5 @@ class Parser:
                 self.until(';')
                 self.pop(';')
                 units.append(self.node('unsupported', start, data={'reason': 'unsupported design unit'}))
-        return Design(units)
+        from .comments import attach_comments
+        return attach_comments(Design(units),self.source)

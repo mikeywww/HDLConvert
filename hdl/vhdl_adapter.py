@@ -11,6 +11,7 @@ from hdlconvert.ast import Node
 from hdlconvert.ast import Diagnostic
 from hdlconvert.lexer import ParseError, words, split as v_split
 from hdlconvert.drivers import combinational_targets, redundant_variable_initializers
+from hdlconvert.comments import decorate, lines as comment_lines
 from .ir import Design, Module, Declaration, Statement, Type, Expr
 from .parser import Parser
 from .lex import expression, tokenize
@@ -19,6 +20,15 @@ from .lex import expression, tokenize
 class VHDLAdapter:
     def __init__(self,top=None,architecture=None,generics=None):
         self.g=Generator(top,architecture,generics);self.enums={};self.types={};self.functions=[];self.nt_symbols={};self.interfaces={}
+        self.enum_comments={};self.pending_comments=[]
+    def comment_metadata(self,n):
+        comments=copy.deepcopy(n.comments)
+        if self.pending_comments:
+            comments.setdefault('main',{}).setdefault('before',[])[:0]=self.pending_comments
+            self.pending_comments=[]
+        return comments
+    def flattened_comments(self,n):
+        self.pending_comments += [text[2:] for text in decorate([],n)+comment_lines(n,'close')+comment_lines(n,'close','inline')]
     def expr(self,tokens):return expression(tokenize(self.g.expr(tokens)))
     def array_default(self,tokens,typ):
         for _ in typ.dimensions:
@@ -44,20 +54,24 @@ class VHDLAdapter:
         if left.kind!='literal' or right.kind!='literal':raise ParseError('record field width must be statically known')
         return abs(int(left.value)-int(right.value))+1
     def declaration(self,n):
-        if n.kind=='attribute':return None
-        if n.kind=='component':return None
+        if n.kind=='attribute':self.flattened_comments(n);return None
+        if n.kind=='component':
+            self.flattened_comments(n)
+            for item in n.children:self.flattened_comments(item)
+            return None
         if n.kind=='enum':
             self.g.declaration(n)
             bits=max(1,(len(n.data['values'])-1).bit_length())
             typ=Type(bounds=(Expr('literal',str(bits-1)),Expr('literal','0')))
             self.enums[n.name]=(typ,[(name,Expr('literal',str(i))) for i,name in enumerate(n.data['values'])])
+            self.enum_comments[n.name]=self.comment_metadata(n)
             return None
         if n.kind=='subtype':
-            self.g.declaration(n);self.types[n.name.lower()]=self.neutral_type(n.data['type']);return None
+            self.g.declaration(n);self.types[n.name.lower()]=self.neutral_type(n.data['type']);self.flattened_comments(n);return None
         if n.kind=='array':
             self.g.declaration(n);typ=self.neutral_type(n.data['type'])
             typ.dimensions=[(self.expr(r.left),self.expr(r.right)) for r in n.data['ranges'] if r.direction!='unconstrained']
-            self.types[n.name.lower()]=typ;return None
+            self.types[n.name.lower()]=typ;self.flattened_comments(n);return None
         if n.kind=='record':
             self.g.declaration(n);fields=[];total=0
             for field in n.children:
@@ -67,8 +81,11 @@ class VHDLAdapter:
             for name,typ,width in fields:
                 offset-=width;mapping[name]=(typ,offset+width-1,offset)
             self.types[n.name.lower()]=Type(bounds=(Expr('literal',str(total-1)),Expr('literal','0')),fields=mapping)
+            self.flattened_comments(n)
+            for field in n.children:self.flattened_comments(field)
             return None
         if n.kind=='function':
+            comments=self.comment_metadata(n)
             self.g.declaration(n)
             old=self.g.symbols;self.g.symbols=Symbols(old)
             old_nt=self.nt_symbols.copy();old_types=self.types.copy();old_enums=self.enums.copy()
@@ -76,12 +93,12 @@ class VHDLAdapter:
                 args=[];locals_=[]
                 for arg in n.data['args']:
                     self.g.declaration(arg);typ=self.neutral_type(arg.data['type'])
-                    self.nt_symbols[arg.name.lower()]=typ;args.append(Declaration(arg.name.lower(),typ,'port','input'))
+                    self.nt_symbols[arg.name.lower()]=typ;args.append(Declaration(arg.name.lower(),typ,'port','input',comments=copy.deepcopy(arg.comments)))
                 for item in n.data['decl']:
                     d=self.declaration(item)
                     if d:locals_.append(d)
                 body=self.statements(n.children,'function')
-                self.functions.append(dict(name=n.name.lower(),type=self.neutral_type(n.data['type']),args=args,locals=locals_,body=body))
+                self.functions.append(dict(name=n.name.lower(),type=self.neutral_type(n.data['type']),args=args,locals=locals_,body=body,comments=comments))
             finally:
                 self.g.symbols=old;self.nt_symbols=old_nt;self.types=old_types;self.enums=old_enums
             return None
@@ -98,13 +115,13 @@ class VHDLAdapter:
         if n.data.get('omit_redundant_initializer'):value=None
         # VHDL power-up initializers are already removed by shared preparation.
         converted=Expr('aggregate','default',[self.array_default(value,typ)]) if typ.dimensions and value else self.expr(value) if value else None
-        decl=Declaration(n.name,typ,kind,direction,converted,line=n.line,source=n.source,attributes=n.data.get('sv_attributes',[]))
+        decl=Declaration(n.name,typ,kind,direction,converted,line=n.line,source=n.source,attributes=n.data.get('sv_attributes',[]),comments=self.comment_metadata(n))
         self.nt_symbols[n.name.lower()]=typ
         return decl
     def convert(self,design):
         from hdlconvert.packages import inline_packages
         design=inline_packages(design)
-        neutral=Design(source_language='vhdl')
+        neutral=Design(source_language='vhdl',comments_tail=list(design.comments_tail))
         entities=[u for u in design.units if u.kind=='entity' and (not self.g.top or u.name.lower()==self.g.top.lower())]
         entity_interfaces={u.name.lower():[(p.name.lower(),p.data.get('direction','in')) for p in u.children if p.kind=='port'] for u in design.units if u.kind=='entity'}
         if any(u.kind not in ('entity','architecture') for u in design.units):raise ParseError('packages/import units require additional neutral lowering')
@@ -112,10 +129,11 @@ class VHDLAdapter:
             arches=[u for u in design.units if u.kind=='architecture' and u.data['entity'].lower()==entity.name.lower() and (not self.g.architecture or u.name.lower()==self.g.architecture.lower())]
             if len(arches)!=1:raise ParseError('select one architecture')
             a=arches[0];self.g.symbols=Symbols();self.enums={};self.types={};self.functions=[];self.nt_symbols={};self.interfaces=dict(entity_interfaces)
+            self.enum_comments={};self.pending_comments=[]
             self.g.symbols.unsigned_arithmetic=a.data.get('unsigned_arithmetic',False)
             self.interfaces.update({d.name.lower():[(p.name.lower(),p.data.get('direction','in')) for p in d.children if p.kind=='port'] for d in a.data['decl'] if d.kind=='component'})
             if entity.data['imports'] or a.data['imports']:raise ParseError('package metadata requires legacy VHDL-to-SV path')
-            m=Module(entity.name.lower(),source=entity.source+'\n'+a.source,line=entity.line)
+            m=Module(entity.name.lower(),source=entity.source+'\n'+a.source,line=entity.line,comments=copy.deepcopy(entity.comments),architecture_comments=copy.deepcopy(a.comments))
             for n in a.data.get('package_decl',[]):
                 d=self.declaration(n)
                 if d:m.declarations.append(d)
@@ -130,7 +148,10 @@ class VHDLAdapter:
                 if n.kind=='signal' and n.name.lower() in removable:n.data['omit_redundant_initializer']=True
                 d=self.declaration(n)
                 if d:m.declarations.append(d)
-            m.enums=dict(self.enums);m.statements=self.statements(a.children,'concurrent');m.functions=list(self.functions)
+            m.enums=dict(self.enums);m.enum_comments=dict(self.enum_comments);m.statements=self.statements(a.children,'concurrent');m.functions=list(self.functions)
+            if self.pending_comments:
+                m.statements.insert(0,Statement('comment',dict(lines=['//'+text for text in self.pending_comments])))
+                self.pending_comments=[]
             for r in a.data.get('interface_ranges',[]):self.g.symbols.check_range(r,self.g.expr)
             for i,(left,direction,right) in enumerate(self.g.symbols.range_checks):
                 guard=Statement('if',dict(condition=Expr('binary','<' if direction=='downto' else '>',[expression(tokenize(left)),expression(tokenize(right))]),otherwise=[],generate=True),
@@ -158,7 +179,8 @@ class VHDLAdapter:
         out=[]
         for n in nodes:
             d=n.data;k=n.kind
-            if k=='null':continue
+            if k=='null':
+                out.append(Statement('comment',dict(lines=decorate([],n))));continue
             if k=='assignment':
                 target_name=d['target'][0].text.lower() if len(d['target'])==1 else ''
                 typ=self.nt_symbols.get(target_name)
@@ -168,8 +190,12 @@ class VHDLAdapter:
                     op='<=' if context=='clocked' and d['op']=='<=' else '=',concurrent=context=='concurrent'))
             elif k=='if':
                 other=self.statements(d['else'],context)
-                for condition,body in reversed(d['branches']):
-                    other=[Statement('if',dict(condition=self.expr(condition),otherwise=other),self.statements(body,context))]
+                for index in reversed(range(len(d['branches']))):
+                    condition,body=d['branches'][index]
+                    comments={} if index==0 else {'main':copy.deepcopy(n.comments.get('branch_'+str(index),{}))}
+                    data=dict(condition=self.expr(condition),otherwise=other)
+                    if index==len(d['branches'])-1:data['else_comments']=copy.deepcopy(n.comments.get('else',{}))
+                    other=[Statement('if',data,self.statements(body,context),comments=comments)]
                 s=other[0]
             elif k in ('case','select'):
                 choices=[]
@@ -193,7 +219,8 @@ class VHDLAdapter:
                         if len(body)!=1 or body[0].kind!='assignment' or body[0].data['target']!=target:raise ParseError('unsupported selected assignment body')
                         arg='value_'+str(i);args.append(Declaration(arg,typ,'port','input'));actuals.append(body[0].data['value'])
                         fnchoices.append((values,[Statement('assignment',dict(target=Expr('name',name),value=Expr('name',arg),op='=',concurrent=False))]))
-                    self.functions.append(dict(name=name,type=typ,args=args,locals=[],automatic=True,body=[Statement('case',dict(expression=Expr('name','sel'),choices=fnchoices))]))
+                    choices_comments={key:copy.deepcopy(value) for key,value in n.comments.items() if key.startswith('choice_')}
+                    self.functions.append(dict(name=name,type=typ,args=args,locals=[],automatic=True,body=[Statement('case',dict(expression=Expr('name','sel'),choices=fnchoices),comments=choices_comments)]))
                     s=Statement('assignment',dict(target=target,value=Expr('call',name,actuals),op='=',concurrent=True))
             elif k=='process':s=self.process(n)
             elif k=='return':s=Statement('return',dict(value=self.expr(d['value'])))
@@ -217,7 +244,7 @@ class VHDLAdapter:
             elif k=='instance':
                 ts=d['tokens'];i=1 if ts[0].lower in ('entity','component') else 0
                 if i+1<len(ts) and ts[i+1].text=='.':
-                    if ts[i].lower!='work':raise ParseError('only work entity binding supported')
+                    if ts[i].lower!='work' and not d.get('vendor_module'):raise ParseError('only work entity binding supported')
                     i+=2
                 module=ts[i].text.lower();i+=1;maps={'parameters':[],'ports':[]}
                 while i<len(ts):
@@ -231,7 +258,12 @@ class VHDLAdapter:
                         pair=v_split(part,'=>')
                         name=pair[0][0].text.lower() if len(pair)==2 else ''
                         value=pair[-1]
-                        maps[key].append((name,None if words(value).lower()=='open' else self.expr(value)))
+                        if words(value).lower()=='open':actual=None
+                        elif key=='parameters' and d.get('vendor_module'):
+                            from hdlconvert.primitives import parameter_expression
+                            actual=Expr('literal',parameter_expression(n,name,value,self.g.expr))
+                        else:actual=self.expr(value)
+                        maps[key].append((name,actual))
                 signature=self.interfaces.get(module)
                 outputs=[]
                 if signature is None and any(actual is not None for _,actual in maps['ports']):
@@ -259,7 +291,7 @@ class VHDLAdapter:
                     maps={key:[(name.upper(),actual) for name,actual in pairs] for key,pairs in maps.items()}
                 s=Statement('instance',dict(module=module,name=n.name,output_targets=outputs,**maps))
             else:raise ParseError(f'line {n.line}: unsupported neutral statement {k}')
-            s.line=n.line;s.source=n.source;s.label=n.name;out.append(s)
+            s.line=n.line;s.source=n.source;s.label=n.name;s.comments=copy.deepcopy(n.comments);out.append(s)
         return out
     def array_assignment(self,n,context):
         from hdlconvert.arrays import source_index
@@ -280,7 +312,7 @@ class VHDLAdapter:
         else:value=self.array_default(d['value'],self.nt_symbols[d['target'][0].lower])
         sym=self.g.symbols.find(d['target'][0].text)
         if (sym.kind=='variable')!=(d['op']==':='):raise ParseError('array signal/variable assignment operator mismatch')
-        body=[Statement('assignment',dict(target=target,value=value,op='<=' if context=='clocked' and d['op']=='<=' else '=',concurrent=context=='concurrent'))]
+        body=[Statement('assignment',dict(target=target,value=value,op='<=' if context=='clocked' and d['op']=='<=' else '=',concurrent=context=='concurrent'),line=n.line,source=n.source,comments=copy.deepcopy(n.comments))]
         for rng,name in reversed(list(zip(info.ranges,names))):
             ascending=rng.direction=='to';left=self.expr(rng.left);right=self.expr(rng.right)
             body=[Statement('for',dict(name=name,start=left,condition=Expr('binary','<=' if ascending else '>=',[Expr('name',name),right]),update=Expr('binary','+' if ascending else '-',[Expr('name',name),Expr('literal','1')]),declared=True,generate=context=='concurrent'),body)]
@@ -303,11 +335,13 @@ class VHDLAdapter:
                 d=self.declaration(item)
                 if d:decl.append(d)
             body=n.children;events=[]
+            edge_comments=[];edge_close=[]
             if len(body)==1 and body[0].kind=='if':
                 branches=body[0].data['branches']
                 if len(branches)==1 and not body[0].data['else']:
                     edge=self.g.edge(branches[0][0])
-                    if edge:events=[edge];body=branches[0][1]
+                    if edge:
+                        events=[edge];edge_comments=decorate([],body[0]);edge_close=comment_lines(body[0],'close')+comment_lines(body[0],'close','inline');body=branches[0][1]
                 elif len(branches)==2 and not body[0].data['else']:
                     edge=self.g.edge(branches[1][0])
                     if edge:
@@ -315,8 +349,11 @@ class VHDLAdapter:
                         match=re.fullmatch(r"([a-z]\w*)='([01])'",raw)
                         if not match:raise ParseError('unsupported reset')
                         reset=('posedge' if match[2]=='1' else 'negedge',self.g.symbols.resolve(match[1]))
-                        events=[edge,reset];body=[Node('if',data={'branches':[branches[0]],'else':branches[1][1]})]
+                        kept=copy.deepcopy(body[0].comments);kept['else']=kept.pop('branch_1',{})
+                        events=[edge,reset];body=[Node('if',data={'branches':[branches[0]],'else':branches[1][1]},comments=kept)]
             result=self.statements(body,'clocked' if events else 'comb')
+            if edge_comments:result.insert(0,Statement('comment',dict(lines=edge_comments)))
+            if edge_close:result.append(Statement('comment',dict(lines=edge_close)))
             if decl:result.insert(0,Statement('declaration',dict(declarations=decl)))
             return Statement('process',dict(events=events,sensitivity=[],flavor='always_ff' if events else 'always_comb'),result)
         finally:

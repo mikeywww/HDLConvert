@@ -5,11 +5,7 @@ from .ast import Node, Range
 from .lexer import ParseError, split, tokenize, words
 from .parser import Parser
 from .encoding import read_source
-
-PRIMITIVES = {
-    'bufg': ('BUFG', 'I:in std_logic; O:out std_logic'),
-    'ibufds_gte4': ('IBUFDS_GTE4', 'I,IB,CEB:in std_logic; O,ODIV2:out std_logic'),
-}
+from .primitives import resolve_primitive, normalize_primitive
 
 
 def walk(nodes):
@@ -79,7 +75,6 @@ def prepare(design,source_path=None):
         if '__hdl_unsigned_arithmetic' in imports:
             unit.data['unsigned_arithmetic']=True
             imports.remove('__hdl_unsigned_arithmetic')
-    vendor=any(n.kind=='vendor_import' for n in design.units)
     for arch in (n for n in design.units if n.kind=='architecture'):
         arch.data['interface_ranges']=[]
         decl=arch.data['decl'];interfaces={n.name.lower():n for n in decl if n.kind=='component'}
@@ -87,9 +82,6 @@ def prepare(design,source_path=None):
         instances=[n for n in walk(arch.children) if n.kind=='instance']
         for n in instances:
             name,_=module_name(n)
-            if name not in interfaces and name in PRIMITIVES and vendor:
-                ports=Parser('entity p is port('+PRIMITIVES[name][1]+');end;').parse().units[0].children
-                interfaces[name]=Node('component',name=name,children=ports)
             if name not in interfaces and source_path:
                 folder=Path(source_path).resolve().parent
                 matches=[p for p in folder.iterdir() if p.is_file() and p.stem.lower()==name and p.suffix.lower() in ('.vhd','.vhdl')]
@@ -97,9 +89,12 @@ def prepare(design,source_path=None):
                 if matches:
                     candidates=[u for u in Parser(read_source(matches[0])).parse().units if u.kind=='entity' and u.name.lower()==name]
                     if len(candidates)==1:interfaces[name]=candidates[0]
+            local_entities={key:value for key,value in interfaces.items() if value.kind=='entity'}
+            primitive=resolve_primitive(n,interfaces,local_entities)
+            if primitive:
+                interfaces[name]=normalize_primitive(n,primitive,interfaces.get(name))
             if name in interfaces and not any(d.kind=='component' and d.name.lower()==name for d in decl):
                 decl.append(Node('component',name=name,children=deepcopy(interfaces[name].children)))
-            if name in PRIMITIVES and vendor:n.data['vendor_module']=PRIMITIVES[name][0]
             if name in interfaces:normalize_maps(n,interfaces[name],arch)
         normalize_attributes(decl)
         entity=entities.get(arch.data['entity'].lower())
@@ -129,8 +124,17 @@ def lower_comb_chains(design):
                     def cyclic(name,active):
                         return name in active or any(cyclic(child,active|{name}) for child in deps[name])
                     if hazard and not any(cyclic(name,set()) for name in names):
-                        if n.name:out.append(Node('generate',line=n.line,name=n.name,source=n.source,data={'condition':tokenize('true')},children=n.children))
-                        else:out.extend(n.children)
+                        from .comments import relocate_removed
+                        if n.name:
+                            replacement=Node('generate',line=n.line,name=n.name,source=n.source,data={'condition':tokenize('true')},children=n.children,comments=deepcopy(n.comments))
+                            # Source begin has no corresponding generate header.
+                            body=replacement.comments.pop('body',{})
+                            first=n.children[0].comments.setdefault('main',{}).setdefault('before',[])
+                            first[:0]=body.get('before',[])+body.get('inline',[])
+                            out.append(replacement)
+                        else:
+                            relocate_removed(n,n.children)
+                            out.extend(n.children)
                         continue
             n.children=transform(n.children)
             for i,(c,b) in enumerate(n.data.get('branches',[])):n.data['branches'][i]=(c,transform(b))

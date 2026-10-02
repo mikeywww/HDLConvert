@@ -6,6 +6,7 @@ from .expressions import Expressions
 from .lexer import ParseError, split, words
 from .symbols import Symbols, TypeInfo, identifier
 from .drivers import combinational_targets, redundant_variable_initializers
+from .comments import decorate, closing, interface, lines as comment_lines
 
 
 def range_key(ranges):
@@ -50,7 +51,7 @@ class Generator:
         if n.kind == 'component':
             return [f'// component {n.name}: instantiated by module name']
         if n.kind == 'prototype':
-            return []  # paired with package body before generation
+            return [line for arg in n.data.get('args',[]) for line in decorate([],arg)] + comment_lines(n,'close') + comment_lines(n,'close','inline')
         if n.kind == 'function':
             return self.function(n)
         if n.kind == 'enum':
@@ -66,9 +67,9 @@ class Generator:
                 typ = self.symbols.type_of(f.data['type'], self.expr)
                 if typ.ranges:
                     raise ParseError('record containing unpacked array unsupported')
-                fields.append(f'{typ.sv} {identifier(f.name.lower())};')
+                fields += decorate([f'{typ.sv} {identifier(f.name.lower())};'], f)
             self.symbols.types[n.name.lower()] = TypeInfo(name, vhdl=n.name)
-            return ['typedef struct packed {'] + self.indent(fields) + [f'}} {name};']
+            return closing(['typedef struct packed {'] + self.indent(fields) + [f'}} {name};'], n)
         if n.kind in ('array', 'subtype'):
             elem = self.symbols.type_of(d['type'], self.expr)
             ranges = d.get('ranges', elem.ranges)
@@ -141,11 +142,11 @@ class Generator:
             names_before = self.symbols.names.copy()
             types_before = self.symbols.types.copy()
             try:
-                result.extend(self.declaration(n))
+                result.extend(decorate(self.declaration(n), n))
             except (ParseError, ValueError) as exc:
                 self.symbols.names = names_before
                 self.symbols.types = types_before
-                result.extend(self.warn(n, str(exc)))
+                result.extend(decorate(self.warn(n, str(exc)), n))
         return result
 
     def function(self, n):
@@ -162,7 +163,10 @@ class Generator:
                     raise ParseError('function supports only input arguments without defaults')
                 args.extend(self.declaration(arg))
             body = self.declarations(n.data['decl']) + self.statements(n.children, 'function')
-            return [f'function automatic {ret.sv} {identifier(n.name)}(' + ', '.join('input ' + a.rstrip(';') for a in args) + ');'] + self.indent(body) + ['endfunction']
+            header = [f'function automatic {ret.sv} {identifier(n.name)}(']
+            header += self.indent(interface(['input ' + a.rstrip(';') for a in args], n.data['args'])) + [');']
+            body = comment_lines(n, 'body') + comment_lines(n, 'body', 'inline') + body
+            return closing(header + self.indent(body) + ['endfunction'], n)
         finally:
             self.symbols = parent
 
@@ -212,7 +216,7 @@ class Generator:
                 raise ParseError('whole-array RHS must be same-range array or others fill')
             lhs = self.expr(target) + ''.join(f'[{v}]' for v in vars_)
             op = '<=' if context == 'clocked' and n.data['op'] == '<=' else '='
-            body.append(f'{lhs} {op} {source};')
+            body += decorate([f'{lhs} {op} {source};'], n)
         for var, rng in reversed(list(zip(vars_, typ.ranges))):
             body = self.loop(var, rng, body)
         if context == 'concurrent':
@@ -238,9 +242,9 @@ class Generator:
                     result.extend(self.array_assignments(group, context))
                     i += len(group)
                     continue
-                result.extend(self.statement(n, context))
+                result.extend(decorate(self.statement(n, context), n))
             except (ParseError, ValueError) as exc:
-                result.extend(self.warn(n, str(exc)))
+                result.extend(decorate(self.warn(n, str(exc)), n))
             i += 1
         return result
 
@@ -248,7 +252,7 @@ class Generator:
         d = n.data
         if n.kind=='while':
             if context!='function':raise ParseError('while supported only inside bounded RTL functions')
-            return ['while ('+self.expr(d['condition'])+') begin']+self.indent(self.statements(n.children,context))+['end']
+            return closing(['while ('+self.expr(d['condition'])+') begin']+self.indent(self.statements(n.children,context))+['end'], n)
         if n.kind == 'unsupported':
             return self.warn(n, d['reason'])
         if n.kind == 'null':
@@ -276,22 +280,23 @@ class Generator:
                 raise ParseError('if statement outside process requires generate')
             lines = []
             for index, (cond, body) in enumerate(d['branches']):
-                lines.append(('if' if index == 0 else 'end else if') + f' ({self.expr(cond)}) begin')
+                header = [('if' if index == 0 else 'end else if') + f' ({self.expr(cond)}) begin']
+                lines += decorate(header, n, 'branch_' + str(index)) if index else header
                 lines += self.indent(self.statements(body, context))
             if d['else']:
-                lines += ['end else begin'] + self.indent(self.statements(d['else'], context))
-            return lines + ['end']
+                lines += decorate(['end else begin'], n, 'else') + self.indent(self.statements(d['else'], context))
+            return closing(lines + ['end'], n)
         if n.kind in ('case', 'select'):
             ctx = 'comb' if n.kind == 'select' else context
             lines = [f'case ({self.expr(d["expr"])})']
-            for choices, body in d['choices']:
+            for index, (choices, body) in enumerate(d['choices']):
                 labels = []
                 for choice in choices:
                     labels.append('default' if words(choice).lower() == 'others' else self.expr(choice))
                 if 'default' in labels and len(labels) != 1:
                     raise ParseError('others cannot share a case alternative')
-                lines += self.indent([', '.join(labels) + ': begin'] + self.indent(self.statements(body, ctx)) + ['end'])
-            lines += ['endcase']
+                lines += self.indent(decorate([', '.join(labels) + ': begin'], n, 'choice_' + str(index)) + self.indent(self.statements(body, ctx)) + ['end'])
+            lines = closing(lines + ['endcase'], n)
             if n.kind == 'select':
                 lines = ['always_comb begin'] + self.indent(lines) + ['end']
             return lines
@@ -313,7 +318,7 @@ class Generator:
             else:
                 lines = [f'if ({self.expr(d["condition"])}) begin : {identifier(n.name)}'] + self.indent(self.statements(n.children, 'concurrent')) + ['end']
             # Implicit generate region is legal SV, including nested generates.
-            return lines
+            return closing(lines, n)
         if n.kind == 'instance':
             return self.instance(n)
         if n.kind == 'process':
@@ -357,11 +362,14 @@ class Generator:
                         declaration.data['omit_redundant_initializer'] = True
             decl = self.declarations(process_declarations)
             body, clock, reset = n.children, None, None
+            edge_comments, edge_close = [], []
             if len(body) == 1 and body[0].kind == 'if':
                 branches = body[0].data['branches']
                 if len(branches) == 1 and not body[0].data['else']:
                     clock = self.edge(branches[0][0])
                     if clock:
+                        edge_comments = decorate([], body[0])
+                        edge_close = comment_lines(body[0], 'close') + comment_lines(body[0], 'close', 'inline')
                         body = branches[0][1]
                 elif len(branches) == 2 and not body[0].data['else']:
                     clock = self.edge(branches[1][0])
@@ -371,7 +379,10 @@ class Generator:
                         if not match:
                             raise ParseError('async reset must compare one signal with 0 or 1')
                         reset = ('posedge' if match[2] == '1' else 'negedge', self.symbols.resolve(match[1]))
-                        body = [Node('if', n.line, n.source, data={'branches': [branches[0]], 'else': branches[1][1]})]
+                        original = body[0]
+                        kept = copy.deepcopy(original.comments)
+                        kept['else'] = kept.pop('branch_1', {})
+                        body = [Node('if', original.line, original.source, data={'branches': [branches[0]], 'else': branches[1][1]}, comments=kept)]
             from .lexer import tokenize
             process_tokens = [t.lower for t in tokenize(n.source)]
             if not clock and any(t in process_tokens for t in ('rising_edge', 'falling_edge', 'event')):
@@ -416,7 +427,8 @@ class Generator:
                     raise ParseError('clock/reset absent from process sensitivity list')
             header = 'always_ff @(' + ' '.join(clock) + (' or ' + ' '.join(reset) if reset else '') + ')' if clock else 'always_comb'
             header += ' begin' + (' : ' + identifier(n.name) if n.name else '')
-            return [header] + self.indent(decl + self.statements(body, 'clocked' if clock else 'comb')) + ['end']
+            content = decl + comment_lines(n, 'body') + comment_lines(n, 'body', 'inline') + edge_comments + self.statements(body, 'clocked' if clock else 'comb') + edge_close
+            return closing([header] + self.indent(content) + ['end'], n)
         finally:
             self.symbols = parent
 
@@ -425,7 +437,7 @@ class Generator:
         if ts[0].lower in ('entity', 'component'):
             i = 1
             if len(ts) > i+1 and ts[i+1].text == '.':
-                if ts[i].lower != 'work':
+                if ts[i].lower != 'work' and not n.data.get('vendor_module'):
                     raise ParseError('only work library entity binding supported')
                 i += 2
         module = ts[i].text
@@ -454,7 +466,13 @@ class Generator:
                 if current_named:
                     if len(pair[0]) != 1:
                         raise ParseError('partial port association unsupported')
-                    expr = '' if words(pair[1]).lower() == 'open' else self.expr(pair[1])
+                    if words(pair[1]).lower() == 'open':
+                        expr = ''
+                    elif kind == 'generic' and n.data.get('vendor_module'):
+                        from .primitives import parameter_expression
+                        expr = parameter_expression(n, pair[0][0].text, pair[1], self.expr)
+                    else:
+                        expr = self.expr(pair[1])
                     formal=pair[0][0].text.upper() if n.data.get('vendor_module') else pair[0][0].text.lower()
                     mapped.append(f'.{identifier(formal)}({expr})')
                 elif part:
@@ -465,18 +483,9 @@ class Generator:
         return [f'{identifier(n.data.get("vendor_module",module.lower()))}{param} {identifier(n.name)} ('] + self.indent([',\n    '.join(maps.get('port', []))]) + [');']
 
     def imports(self, names):
-        lines = []
-        for name in dict.fromkeys(names):
-            lines.append(f'import {identifier(name.lower())}::*;')
-            scope = self.packages.get(name.lower())
-            if scope:
-                self.symbols.types.update(scope.types)
-                self.symbols.names.update(scope.names)
-            else:
-                message = f'package {name} not provided; imported metadata unavailable'
-                self.diagnostics.append(Diagnostic(1, message))
-                lines += [f'// WARNING: line 1: {message}', '// Original VHDL:', f'// use work.{name}.all;']
-        return lines
+        from .context import load_package_context
+        load_package_context(self.symbols, self.packages, names)
+        return []
 
     @staticmethod
     def child_output_targets(architecture, entities):
@@ -540,8 +549,11 @@ class Generator:
             for proto in (n for n in declarations if n.kind == 'prototype' and n.name.lower() not in implemented):
                 lines += self.warn(proto, 'function prototype has no supplied body')
             imports = self.imports(p.data['imports'])
-            content = self.declarations(declarations)
-            lines += [f'package {identifier(p.name.lower())};'] + self.indent(imports + content) + ['endpackage', '']
+            content = self.declarations(p.children)
+            if body:
+                content += decorate([],p,'close') + decorate(self.declarations(body.children),body)
+            package = closing([f'package {identifier(p.name.lower())};'] + self.indent(imports + content) + ['endpackage'], body or p)
+            lines += decorate(package, p) + ['']
             self.packages[p.name.lower()] = self.symbols
         entities = {u.name.lower(): u for u in units if u.kind == 'entity'}
         if self.top and self.top.lower() not in entities:
@@ -560,7 +572,7 @@ class Generator:
             child_outputs = self.child_output_targets(a, entities)
             conflict = child_outputs & self.assigned_signal_targets(a.children)
             if conflict:raise ParseError('child output has an additional parent driver: '+', '.join(sorted(conflict)))
-            params, ports = [], []
+            params, ports, param_nodes, port_nodes = [], [], [], []
             for n in e.children:
                 # Canonicalize interface spelling for cross-file instantiation.
                 n = copy.deepcopy(n)
@@ -571,11 +583,12 @@ class Generator:
                     n.data['child_output_net'] = True
                 declaration = self.declaration(n)[0].rstrip(';')
                 (params if n.kind == 'generic' else ports).append(declaration)
+                (param_nodes if n.kind == 'generic' else port_nodes).append(n)
             header = f'module {identifier(e.name.lower())}'
-            lines += [header] + self.indent(imports)
+            lines += decorate([header], e) + self.indent(imports)
             if params:
-                lines += ['#('] + self.indent([',\n    '.join(params)]) + [')']
-            lines += ['('] + self.indent([',\n    '.join(ports)]) + [');']
+                lines += ['#('] + self.indent(interface(params, param_nodes)) + [')']
+            lines += ['('] + self.indent(interface(ports, port_nodes)) + decorate([');'], e, 'close')
             targets = combinational_targets(a.children)
             declarations = copy.deepcopy(a.data['decl'])
             for declaration in declarations:
@@ -586,13 +599,13 @@ class Generator:
                     if declaration.data.get('value'):
                         declaration.data['omit_redundant_initializer'] = True
                         self.diagnostics.append(Diagnostic(declaration.line,f'declaration initializer omitted for child output {declaration.name}'))
-            lines += self.indent(self.declarations(declarations))
+            lines += self.indent(decorate(self.declarations(declarations), a))
             for r in a.data.get('interface_ranges',[]):self.symbols.check_range(r,self.expr)
-            lines += self.indent(self.statements(a.children, 'concurrent'))
+            lines += self.indent(comment_lines(a, 'body') + comment_lines(a, 'body', 'inline') + self.statements(a.children, 'concurrent'))
             for i,(left,direction,right) in enumerate(self.symbols.range_checks):
                 lines+=self.indent(['generate',f'if (({left}) {"<" if direction=="downto" else ">"} ({right})) begin : hdl_range_{i}',
                     '    HDLConvert_NULL_RANGE_UNSUPPORTED invalid_range();','end','endgenerate'])
-            lines += ['endmodule', '']
+            lines += decorate(['endmodule'], a, 'close') + ['']
         for u in units:
             if u.kind == 'unsupported':
                 lines += self.warn(u, u.data['reason'])
@@ -602,4 +615,4 @@ class Generator:
                 raise ParseError(f'package body {u.name} has no supplied package header')
         if not selected and not self.packages:
             raise ParseError('no convertible entity or package found')
-        return '\n'.join(lines) + '\n'
+        return '\n'.join(lines + design.comments_tail) + '\n'

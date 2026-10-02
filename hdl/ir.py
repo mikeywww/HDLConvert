@@ -43,6 +43,7 @@ class Declaration:
     source: str = ''
     init_policy: InitPolicy = InitPolicy.UNCERTAIN
     attributes: list = field(default_factory=list)
+    comments: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -53,6 +54,7 @@ class Statement:
     line: int = 1
     source: str = ''
     label: str = ''
+    comments: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -67,6 +69,9 @@ class Module:
     source: str = ''
     line: int = 1
     external_symbols: dict = field(default_factory=dict)
+    comments: dict = field(default_factory=dict)
+    architecture_comments: dict = field(default_factory=dict)
+    enum_comments: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -75,3 +80,4 @@ class Design:
     diagnostics: list = field(default_factory=list)
     source_language: str = ''
     source: str = ''
+    comments_tail: list = field(default_factory=list)

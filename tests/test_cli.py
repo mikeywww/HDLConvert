@@ -34,7 +34,9 @@ class CliTests(unittest.TestCase):
             source.write_text('use work.types.all;' + unit('signal a,b:t;', 'process(clk) begin if rising_edge(clk) then a<=b; end if; end process;'))
             result = convert_file(source, dependencies=[pkg], strict=True)
             self.assertIn('i = 3; i <= 5', result.text)
-            self.assertIn('import types::*;', result.text)
+            self.assertIn('types::t a;', result.text)
+            self.assertIn('types::t b;', result.text)
+            self.assertNotIn('import ', result.text)
 
     def test_output_collision(self):
         with tempfile.TemporaryDirectory(dir='.') as directory:

@@ -87,6 +87,14 @@ VHDL `x"0001aa"` 转为保留原位宽的 `24'h1aa`，也兼容 `x'0001aa'` 写�
 
 VHDL→Verilog/SV 支持固定一/二维数组、非零/降序范围及同长度不同边界的逐元素位置对应；整数组复制展开为循环。简单 package 常量、类型和函数在 Verilog 中内联；SV 保留 package。支持常见 numeric_std 转换、selected assignment、完整静态端口分片关联、generic 相关端口填充值和信号字符串属性。无约束 vector 函数可按已证明的参数及函数体返回边界生成不同位宽版本；复杂返回推导仍拒绝。简单无反馈的 `process(all)` signal 赋值链降低为连续方程；带分支、反馈或显式 sensitivity 的复杂 delta 依赖仍拒绝。
 
+VHDL 开头的 `library` / `use` 引用直接略过，不生成 `import`，未知且未使用的库引用不阻止转换。已提供的 package 定义仍用于识别类型、常量和函数；SV 使用 `包名::名称`，Verilog 展平这些定义。实际引用缺失的类型或函数时仍会报错。
+
+普通 `-- comment` 和 `---comment` 注释按声明、接口、过程、if/case 分支、赋值及结束位置保留，输出分别使用 `// comment` 和 `//comment`。整数组展开、过程降低和 package 展平时，注释随对应结构迁移；输出格式改变后不保持原始行号。删除声明初值不会新增注释。
+
+Vivado 原语使用依据 [AMD UG953](https://docs.amd.com/r/2025.2-English/ug953-vivado-7series-libraries) / [UG974](https://docs.amd.com/r/2025.2-English/ug974-vivado-ultrascale-libraries) 模板核对的接口元数据：保持原语/端口/参数大小写，位置关联转为命名关联，布尔 generic 转为模型要求的 `"TRUE"` / `"FALSE"` 字符串，INIT 使用模型位宽。运行转换器无需安装 Vivado；使用输出的工程仍需正常配置相应器件库。
+
+当前核对的 36 个原语：BUFG、BUFH、BUFIO、BUFR、BUFGCE、BUFGCE_DIV、BUFGCTRL、BUFG_GT、BUFG_GT_SYNC、BUFHCE、IBUF、IBUFDS、OBUF、OBUFDS、OBUFT、OBUFTDS、IOBUF、IOBUFDS、IBUFDS_GTE2/3/4、FDCE、FDPE、FDRE、FDSE、LUT1–6、LUT6_2、MUXF7/8、SRL16E、SRLC32E。未核对的显式 UNISIM 原语和冲突的同名接口会明确拒绝；RAMB/DSP/GT 等复杂原语需后续增加对应模板。自定义同文件或同目录实体优先于未限定库名的原语名称。
+
 Verilog/SV 路径支持 DDR3 示例生成结果中的 function、固定数组、packed struct 和局部静态变量。完整 case 译码在 Verilog 中使用连续函数调用，保留启动时求值。跨语言互转仅对受支持的 RTL 子集保留功能，不承诺任意 SV 语法、注释或格式无损。运行时二值 `bit` 存储、复杂静态函数状态等结构会明确拒绝。
 
 ## 部分代码段
