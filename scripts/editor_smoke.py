@@ -27,6 +27,16 @@ def main():
         assert app.source.text.tag_ranges('keyword')
         app.source.select_all();assert app.source.text.tag_ranges('sel')
         app.clear();assert not app.source.get() and not app.output.get()
-        print('PASS: Chinese editor/default encoding, TkDND Unicode drop, language inference, worker conversion, highlight, selection and clear')
+        app.source.set('entity m is port(q:out std_logic);end;architecture rtl of m is begin wait;end;')
+        app.source_language.set('VHDL');app.target_language.set('SystemVerilog')
+        app.convert();deadline=time.monotonic()+15
+        while app.busy and time.monotonic()<deadline:root.update();time.sleep(.02)
+        assert not app.busy and not app.output_complete and '转换失败' in app.status.get(),(app.busy,app.output_complete,app.status.get(),app.log.get('1.0','end'),app.output.get())
+        app.save_as();assert '不能保存为有效 HDL' in app.log.get('1.0','end')
+        app.clear();assert app.output_complete
+        app.output.set('previous result');app.busy=True
+        app.events.put(('error','worker exception','systemverilog'));app.poll()
+        assert not app.output_complete and not app.output.get()
+        print('PASS: Chinese editor/default encoding, TkDND Unicode drop, worker conversion, highlight, selection, clear, and incomplete HDL save refusal')
     finally:root.destroy()
 if __name__=='__main__':main()

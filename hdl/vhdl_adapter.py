@@ -29,7 +29,9 @@ class VHDLAdapter:
     def neutral_type(self,ref):
         name=ref.name.lower()
         if name in self.types:
-            return copy.deepcopy(self.types[name])
+            typ=copy.deepcopy(self.types[name])
+            if ref.ranges:typ.dimensions=[(self.expr(r.left),self.expr(r.right)) for r in ref.ranges]
+            return typ
         info=self.g.symbols.type_of(ref,self.g.expr)
         parser=Parser('');parser.enums=self.enums
         neutral_type=re.sub(r'\bbit\b','logic',info.sv)
@@ -42,6 +44,7 @@ class VHDLAdapter:
         if left.kind!='literal' or right.kind!='literal':raise ParseError('record field width must be statically known')
         return abs(int(left.value)-int(right.value))+1
     def declaration(self,n):
+        if n.kind=='attribute':return None
         if n.kind=='component':return None
         if n.kind=='enum':
             self.g.declaration(n)
@@ -53,7 +56,7 @@ class VHDLAdapter:
             self.g.declaration(n);self.types[n.name.lower()]=self.neutral_type(n.data['type']);return None
         if n.kind=='array':
             self.g.declaration(n);typ=self.neutral_type(n.data['type'])
-            typ.dimensions=[(self.expr(r.left),self.expr(r.right)) for r in n.data['ranges']]
+            typ.dimensions=[(self.expr(r.left),self.expr(r.right)) for r in n.data['ranges'] if r.direction!='unconstrained']
             self.types[n.name.lower()]=typ;return None
         if n.kind=='record':
             self.g.declaration(n);fields=[];total=0
@@ -68,6 +71,7 @@ class VHDLAdapter:
         if n.kind=='function':
             self.g.declaration(n)
             old=self.g.symbols;self.g.symbols=Symbols(old)
+            old_nt=self.nt_symbols.copy();old_types=self.types.copy();old_enums=self.enums.copy()
             try:
                 args=[];locals_=[]
                 for arg in n.data['args']:
@@ -78,7 +82,8 @@ class VHDLAdapter:
                     if d:locals_.append(d)
                 body=self.statements(n.children,'function')
                 self.functions.append(dict(name=n.name.lower(),type=self.neutral_type(n.data['type']),args=args,locals=locals_,body=body))
-            finally:self.g.symbols=old
+            finally:
+                self.g.symbols=old;self.nt_symbols=old_nt;self.types=old_types;self.enums=old_enums
             return None
         if n.kind in ('prototype','unsupported'):
             raise ParseError(f'line {n.line}: {n.kind} lowering to neutral IR not supported')
@@ -87,14 +92,18 @@ class VHDLAdapter:
         direction={'in':'input','out':'output','inout':'inout','':''}.get(n.data.get('direction',''))
         if direction is None:raise ParseError('unsupported direction')
         kind={'generic':'parameter','constant':'localparam','variable':'variable'}.get(n.kind,n.kind)
+        if kind in ('parameter','localparam') and typ.kind=='bits' and not typ.bounds and not typ.enum:
+            typ.bounds=(Expr('literal','0'),Expr('literal','0'))
         value=n.data.get('value')
         if n.data.get('omit_redundant_initializer'):value=None
-        # Preserve FPGA power-up state with per-element initial assignments.
+        # VHDL power-up initializers are already removed by shared preparation.
         converted=Expr('aggregate','default',[self.array_default(value,typ)]) if typ.dimensions and value else self.expr(value) if value else None
-        decl=Declaration(n.name,typ,kind,direction,converted,line=n.line,source=n.source)
+        decl=Declaration(n.name,typ,kind,direction,converted,line=n.line,source=n.source,attributes=n.data.get('sv_attributes',[]))
         self.nt_symbols[n.name.lower()]=typ
         return decl
     def convert(self,design):
+        from hdlconvert.packages import inline_packages
+        design=inline_packages(design)
         neutral=Design(source_language='vhdl')
         entities=[u for u in design.units if u.kind=='entity' and (not self.g.top or u.name.lower()==self.g.top.lower())]
         entity_interfaces={u.name.lower():[(p.name.lower(),p.data.get('direction','in')) for p in u.children if p.kind=='port'] for u in design.units if u.kind=='entity'}
@@ -103,9 +112,13 @@ class VHDLAdapter:
             arches=[u for u in design.units if u.kind=='architecture' and u.data['entity'].lower()==entity.name.lower() and (not self.g.architecture or u.name.lower()==self.g.architecture.lower())]
             if len(arches)!=1:raise ParseError('select one architecture')
             a=arches[0];self.g.symbols=Symbols();self.enums={};self.types={};self.functions=[];self.nt_symbols={};self.interfaces=dict(entity_interfaces)
+            self.g.symbols.unsigned_arithmetic=a.data.get('unsigned_arithmetic',False)
             self.interfaces.update({d.name.lower():[(p.name.lower(),p.data.get('direction','in')) for p in d.children if p.kind=='port'] for d in a.data['decl'] if d.kind=='component'})
             if entity.data['imports'] or a.data['imports']:raise ParseError('package metadata requires legacy VHDL-to-SV path')
             m=Module(entity.name.lower(),source=entity.source+'\n'+a.source,line=entity.line)
+            for n in a.data.get('package_decl',[]):
+                d=self.declaration(n)
+                if d:m.declarations.append(d)
             for n in entity.children:
                 n=copy.deepcopy(n);n.name=n.name.lower()
                 if n.kind=='generic' and n.name in self.g.generics:n.data['value']=self.g.generics[n.name]
@@ -118,6 +131,11 @@ class VHDLAdapter:
                 d=self.declaration(n)
                 if d:m.declarations.append(d)
             m.enums=dict(self.enums);m.statements=self.statements(a.children,'concurrent');m.functions=list(self.functions)
+            for r in a.data.get('interface_ranges',[]):self.g.symbols.check_range(r,self.g.expr)
+            for i,(left,direction,right) in enumerate(self.g.symbols.range_checks):
+                guard=Statement('if',dict(condition=Expr('binary','<' if direction=='downto' else '>',[expression(tokenize(left)),expression(tokenize(right))]),otherwise=[],generate=True),
+                    [Statement('instance',dict(module='HDLConvert_NULL_RANGE_UNSUPPORTED',name='invalid_range',parameters=[],ports=[],output_targets=[]))],label='hdl_range_'+str(i))
+                m.statements.append(Statement('generate',body=[guard]))
             child_outputs={name for statement in self._walk(m.statements) if statement.kind=='instance' for name in statement.data['output_targets']}
             for d in m.declarations:
                 if d.name.lower() in child_outputs and d.value is not None:
@@ -144,16 +162,9 @@ class VHDLAdapter:
             if k=='assignment':
                 target_name=d['target'][0].text.lower() if len(d['target'])==1 else ''
                 typ=self.nt_symbols.get(target_name)
-                if typ and typ.dimensions and 'others' in words(d['value']).lower():
-                    if context=='concurrent':raise ParseError('concurrent array aggregate requires generate lowering')
-                    target=Expr('name',target_name)
-                    for dim in range(len(typ.dimensions)):target=Expr('index',args=[target,Expr('name','hdl_i'+str(dim))])
-                    body=[Statement('assignment',dict(target=target,value=self.array_default(d['value'],typ),op='<=' if context=='clocked' and d['op']=='<=' else '=',concurrent=False))]
-                    for dim,(left,right) in reversed(list(enumerate(typ.dimensions))):
-                        ascending=int(left.value)<=int(right.value);name='hdl_i'+str(dim)
-                        s=Statement('for',dict(name=name,start=left,condition=Expr('binary','<=' if ascending else '>=',[Expr('name',name),right]),update=Expr('binary','+' if ascending else '-',[Expr('name',name),Expr('literal','1')]),declared=True,generate=False),body);body=[s]
-                    s.line=n.line;s.source=n.source;s.label=n.name;out.append(s);continue
-                s=Statement('assignment',dict(target=self.expr(d['target']),value=self.expr(d['value']),
+                if typ and typ.dimensions:
+                    out.extend(self.array_assignment(n,context));continue
+                s=Statement('assignment',dict(target=self.expr(d['target']),value=expression(tokenize(self.g.assignment_expr(d['target'],d['value']))),
                     op='<=' if context=='clocked' and d['op']=='<=' else '=',concurrent=context=='concurrent'))
             elif k=='if':
                 other=self.statements(d['else'],context)
@@ -186,6 +197,9 @@ class VHDLAdapter:
                     s=Statement('assignment',dict(target=target,value=Expr('call',name,actuals),op='=',concurrent=True))
             elif k=='process':s=self.process(n)
             elif k=='return':s=Statement('return',dict(value=self.expr(d['value'])))
+            elif k=='while':
+                if context!='function':raise ParseError('while supported only inside RTL functions')
+                s=Statement('while',dict(condition=self.expr(d['condition'])),self.statements(n.children,context))
             elif k in ('for','generate'):
                 gen=k=='generate'
                 if 'variable' in d:
@@ -233,19 +247,52 @@ class VHDLAdapter:
                             direction=signature[position][1]
                         if direction in ('out','inout','buffer') and actual is not None:
                             from .verilog import root_name
-                            if actual.kind not in ('name','index','slice','field') or not root_name(actual):
-                                raise ParseError(f'line {n.line}: child output requires a signal target')
-                            outputs.append(root_name(actual))
+                            def leaves(expr):
+                                if expr.kind=='concat':
+                                    for arg in expr.args:yield from leaves(arg)
+                                else:yield expr
+                            for part in leaves(actual):
+                                if part.kind not in ('name','index','slice','field') or not root_name(part):raise ParseError(f'line {n.line}: child output requires a signal target')
+                                outputs.append(root_name(part))
+                if d.get('vendor_module'):
+                    module=d['vendor_module']
+                    maps={key:[(name.upper(),actual) for name,actual in pairs] for key,pairs in maps.items()}
                 s=Statement('instance',dict(module=module,name=n.name,output_targets=outputs,**maps))
             else:raise ParseError(f'line {n.line}: unsupported neutral statement {k}')
             s.line=n.line;s.source=n.source;s.label=n.name;out.append(s)
         return out
+    def array_assignment(self,n,context):
+        from hdlconvert.arrays import source_index
+        d=n.data;info=self.g.array_info(n);target=self.expr(d['target'])
+        names=[]
+        for dim in range(len(info.ranges)):
+            name='hdl_i'+str(dim)
+            while self.g.symbols.find(name):name='_'+name
+            names.append(name)
+        for name in names:target=Expr('index',args=[target,Expr('name',name)])
+        if len(d['value'])==1:
+            rhs=self.g.symbols.find(d['value'][0].text)
+            if not rhs or not rhs.type.ranges or len(rhs.type.ranges)!=len(info.ranges) or rhs.type.element!=info.element:
+                raise ParseError('whole-array RHS needs compatible array elements and dimensions')
+            value=self.expr(d['value'])
+            for a,b,name in zip(info.ranges,rhs.type.ranges,names):
+                value=Expr('index',args=[value,expression(tokenize(source_index(a,b,name,self.g.expr)))])
+        else:value=self.array_default(d['value'],self.nt_symbols[d['target'][0].lower])
+        sym=self.g.symbols.find(d['target'][0].text)
+        if (sym.kind=='variable')!=(d['op']==':='):raise ParseError('array signal/variable assignment operator mismatch')
+        body=[Statement('assignment',dict(target=target,value=value,op='<=' if context=='clocked' and d['op']=='<=' else '=',concurrent=context=='concurrent'))]
+        for rng,name in reversed(list(zip(info.ranges,names))):
+            ascending=rng.direction=='to';left=self.expr(rng.left);right=self.expr(rng.right)
+            body=[Statement('for',dict(name=name,start=left,condition=Expr('binary','<=' if ascending else '>=',[Expr('name',name),right]),update=Expr('binary','+' if ascending else '-',[Expr('name',name),Expr('literal','1')]),declared=True,generate=context=='concurrent'),body)]
+        if context=='concurrent':body=[Statement('generate',body=body)]
+        return body
     def process(self,n):
         # Run the mature semantic checks, including read-after-write and invalid
         # clock structures, before constructing neutral statements.
         before=len(self.g.diagnostics);self.g.process(n)
         if len(self.g.diagnostics)!=before:raise ParseError(self.g.diagnostics[-1].message)
         old=self.g.symbols;self.g.symbols=Symbols(old)
+        old_nt=self.nt_symbols.copy();old_types=self.types.copy();old_enums=self.enums.copy()
         try:
             decl=[]
             initialized={item.name.lower() for item in n.data['decl'] if item.kind=='variable' and item.data.get('value')}
@@ -272,4 +319,5 @@ class VHDLAdapter:
             result=self.statements(body,'clocked' if events else 'comb')
             if decl:result.insert(0,Statement('declaration',dict(declarations=decl)))
             return Statement('process',dict(events=events,sensitivity=[],flavor='always_ff' if events else 'always_comb'),result)
-        finally:self.g.symbols=old
+        finally:
+            self.g.symbols=old;self.nt_symbols=old_nt;self.types=old_types;self.enums=old_enums

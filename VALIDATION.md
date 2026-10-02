@@ -1,5 +1,16 @@
 # Validation record
 
+## 2026-10-02 — Stage 26: VHDL declaration policy and capability audit
+
+- Removed VHDL signal/process-variable declaration initializers in the shared AST preparation. Automatic function-local values now become ordered body assignments; constants, generic defaults and reset statements remain. Removal emits no comments or initialization blocks.
+- One full regression run: 95 tests, 93 passed and two assertion mismatches. Corrected the two assertions (parentheses and undriven wire classification); only those two tests were rerun, both passed. No tests skipped.
+- Eight actual-file outputs compiled with Icarus: Aurora bridge/top/reset and DDR3, each in Verilog-2005 and SV-2012. Top compilation uses test-only IP shells.
+- Vivado mixed-language comparison passed once: original VHDL vs generated V/SV, all Aurora bridge outputs and reset synchronizer, 52,497 cycles including directed malformed-frame/backpressure/overflow/reset scenarios and 12,000 deterministic randomized cycles. A behavioral synchronous RAM model was used; real IP/top behavior was not qualified.
+- Scalar-bit numeric increment comparison passed 512 cycles, including two 8-bit wraps. Function `clog2` initialization remains per-call body computation.
+- Seventeen original audit fixtures passed Vivado VHDL-2008 analysis. Thirty-four target observations reproduced outstanding conversion/ownership/coverage defects; see AUDIT_REPORT.md. These observations are intentionally not reported as passing regressions.
+- Default SV file output was verified to still permit a partial warning module; strict mode rejected it and preserved the existing output. This remains an open issue.
+- Logs and generated artifacts: build/audit/. Source project aurora_data_packet was read-only. EXE is still old 2.0.4; no rebuild, push, tag or release performed.
+
 ## 2026-09-18 — Stage 16: true windowed EXE and high-DPI GUI
 
 - PyInstaller now uses the Windows `windowed` bootloader (`runw.exe`). GUI launch does not create a console process/window; frozen CLI mode recovers inherited stdout/stderr or attaches to a parent console when possible.
@@ -135,3 +146,19 @@ This found and fixed time-zero decoder output X, packed-record part-select offse
 One full 91-test regression identified two issues (empty positional associations and an outdated function-lifetime assertion); both were repaired and the two affected tests passed. One further safety regression was added and passed with the affected DDR3 conversion test, bringing the suite to 92 tests without rerunning unrelated cases. Finite simulation does not prove arbitrary language equivalence, reset-free startup, all parameter overrides or board-level DDR behavior.
 
 Final local EXE: 9,799,104 bytes, SHA256 `5987f8e626637f13836ef9723bd335118ce9364d83967e6d89a62deef923a679`. Full isolated verification passed before the final static-state diagnostic guard. After rebuilding with that guard, targeted isolated verification passed for version, GUI PE subsystem, DDR3 reverse conversion and unsafe static-state rejection. Unchanged GUI checks were not repeated. No GitHub upload or Release publication.
+
+## VHDL audit priority repairs — 2026-10-02, local 2.0.5 candidate
+
+Stages 26–29 share the requested declaration policy: no VHDL signal/process-variable declaration initializers, initialization comments or replacement initial blocks. Constants, generic defaults, reset logic and per-call function body initialization remain.
+
+One full regression ran 106 tests (99 passed, 7 failed). Driver checks incorrectly rejected disjoint record fields/complementary generate branches, and old assertions conflicted with newly supported arrays/chains and fail-closed policy. Repairs and targeted rechecks passed; the full suite was not repeated. Three later meaningful behavioral regressions also passed, bringing the suite to 109 tests. Evidence: `build/audit/repair_regression.log`, `repair_recheck.log`, `tests/test_priority_fixes.py`. Icarus was present, not skipped.
+
+Fourteen priority regressions cover V2005/SV2012 compilation and behavioral tests of nonzero/opposite-direction 1D/2D arrays, concurrent positional copies, scalar arithmetic on both sides and indexed increments (520 clocks), multiwidth functions/slices, package types/functions and header parameter scope, partial formal bit order, parent generic fill override, declaration attribute roundtrips, simple delta chains and typed scalar parameter overrides. Failure tests protect existing outputs and reject multiple drivers, unsupported RTL removal, ambiguous partial maps, unproved return widths and static/overridden null ranges.
+
+Latest actual outputs: Aurora bridge/top/reset and DDR3, each converted directly to V and SV (8 files), compile with no conversion diagnostics. Top uses test-only vendor IP interface shells. Original bridge/reset versus the two targets: Vivado passed 52,497 cycles across all bridge outputs, directed frame/backpressure/overflow/reset cases and 12,000 deterministic randomized cycles with behavioral RAM. The separate reset counter passed 512 clocks/two wraps. Evidence: `build/audit/real/`, `build/audit/results.json`, `build/audit/aurora_compare/xsim.log`. This is not real IP/GT top functional verification.
+
+DDR3 Icarus family and Vivado mixed-language checks passed again after the shared ownership/range/parser changes: 5,000 clocks, all outputs, original VHDL and seven translated designs; 208 requests, 104 reads, 103 writes, 6 refreshes, 207 responses, all 20 FSM states. Evidence: `build/roundtrip_validation/`. New partial-formal and generic-fill original audit sources passed xvhdl analysis. No external project source was modified.
+
+Local EXE metadata and isolated frozen result are recorded in RELEASE.md. No push or publication. Finite verification does not prove full language or arbitrary parameter equivalence; complex cases are rejected rather than silently omitted.
+
+Final 2.0.5 artifact: 9,840,105 bytes, SHA256 `25feed702b1dc2706f8080f4f493769405dead3eb09a787f8ee14ed3ca109956`. A full isolated frozen run passed on the initial repaired binary, including the added multiwidth/maps/attributes and incomplete-result file protections. Subsequent GUI-only fixes prevented cursor status from hiding a conversion failure and removed stale saveable output after unexpected worker errors; final frozen targeted version/PE/GUI checks passed, with those cases embedded in `--self-test`. Unaffected conversion checks were not repeated. Evidence: `build/release-verification.log`, `build/release-verification-final.log` and `build/audit/frozen_205.log`.

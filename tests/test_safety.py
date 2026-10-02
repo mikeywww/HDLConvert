@@ -16,14 +16,14 @@ class DiagnosticTests(unittest.TestCase):
         self.assertTrue(result.diagnostics)
         self.assertNotIn('always_comb', result.text)
 
-    def test_different_array_ranges_not_copied(self):
-        result = convert_text(unit('type a_t is array(3 to 5) of std_logic; type b_t is array(0 to 2) of std_logic; signal a:a_t; signal b:b_t;',
+    def test_different_array_lengths_not_copied(self):
+        result = convert_text(unit('type a_t is array(3 to 5) of std_logic; type b_t is array(0 to 3) of std_logic; signal a:a_t; signal b:b_t;',
                                     'process(clk) begin if rising_edge(clk) then a<=b; end if; end process;'))
         self.assertTrue(result.diagnostics)
         self.assertNotIn('a[i] <= b[i]', result.text)
 
     def test_comb_delta_read_warns(self):
-        result = convert_text(unit('signal a:std_logic;', 'process(all) begin a<=d; q<=a; end process;'))
+        result = convert_text(unit('signal a:std_logic;', 'process(d) begin a<=d; q<=a; end process;'))
         self.assertTrue(any('delta-cycle' in d.message for d in result.diagnostics))
 
     def test_strict_preserves_file(self):

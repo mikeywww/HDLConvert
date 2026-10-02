@@ -20,12 +20,22 @@ class Generator:
         self.generics = generics or {}
         self.packages = {}
         self.loop_names = set()
+        self.incomplete = False
 
     def expr(self, tokens):
         return Expressions(self.symbols)(tokens)
+    def assignment_expr(self,target,value):
+        rendered=self.expr(value)
+        if len(target)==1 and len(value)==3 and target[0].lower==value[0].lower and value[1].text in ('+','-') and value[2].text in ("'0'","'1'"):
+            sym=self.symbols.find(target[0].text)
+            if sym and sym.type.vector:
+                # Assignment already truncates to this same vector width.
+                return self.expr(target)+' '+value[1].text+" 1'b"+value[2].text[1]
+        return rendered
 
     def warn(self, node, reason):
-        self.diagnostics.append(Diagnostic(node.line, reason))
+        self.incomplete = True
+        self.diagnostics.append(Diagnostic(node.line, reason, 'ERROR'))
         return [f'// WARNING: line {node.line}: {reason}', '// Original VHDL:'] + ['// ' + s for s in node.source.splitlines()]
 
     @staticmethod
@@ -34,6 +44,7 @@ class Generator:
 
     def declaration(self, n):
         d, name = n.data, identifier(n.name)
+        if n.kind=='attribute':return []
         if n.kind == 'unsupported':
             return self.warn(n, d['reason'])
         if n.kind == 'component':
@@ -61,8 +72,15 @@ class Generator:
         if n.kind in ('array', 'subtype'):
             elem = self.symbols.type_of(d['type'], self.expr)
             ranges = d.get('ranges', elem.ranges)
+            for rng in ranges:
+                if rng.direction!='unconstrained':self.symbols.check_range(rng,self.expr)
             if n.kind == 'array' and (len(ranges) > 2 or elem.ranges):
                 raise ParseError('only one/two dimensional arrays of scalar or vector supported')
+            if n.kind == 'array' and any(r.direction == 'unconstrained' for r in ranges):
+                if not all(r.direction == 'unconstrained' for r in ranges):
+                    raise ParseError('mixed constrained/unconstrained array dimensions unsupported')
+                self.symbols.types[n.name.lower()] = TypeInfo(elem.sv, ranges, elem.signed, False, elem, n.name, True)
+                return []
             suffix = ''.join(f' [{self.expr(r.left)}:{self.expr(r.right)}]' for r in d.get('ranges', []))
             self.symbols.types[n.name.lower()] = TypeInfo(name, ranges, elem.signed, elem.vector if not ranges else False,
                                                          elem if n.kind == 'array' else elem.element, n.name if n.kind == 'array' else elem.vhdl)
@@ -108,7 +126,14 @@ class Generator:
                     if bounds:
                         literal = f"{abs(int(bounds[1])-int(bounds[2]))+1}'h0"
                 init = ' = ' + literal
-        return [f'{prefix}{typ.sv} {name}{init};']
+        if n.kind in ('constant','generic') and value:
+            from hdl.initialization import constant_value
+            try:self.symbols.constants[n.name.lower()]=constant_value(value,self.symbols.constants)
+            except (ValueError,ZeroDivisionError):pass
+        attrs=d.get('sv_attributes',[])
+        annotation='(* '+', '.join(k+' = '+v for k,v in attrs)+' *) ' if attrs else ''
+        suffix = ''.join(f' [{self.expr(r.left)}:{self.expr(r.right)}]' for r in typ.ranges) if typ.inline_array else ''
+        return [f'{annotation}{prefix}{typ.sv} {name}{suffix}{init};']
 
     def declarations(self, nodes):
         result = []
@@ -175,11 +200,12 @@ class Generator:
                 raise ParseError('array signal/variable assignment operator mismatch')
             rhs = self.symbols.find(value[0].text) if len(value) == 1 else None
             if rhs and rhs.type.ranges:
-                if range_key(rhs.type.ranges) != range_key(typ.ranges):
-                    raise ParseError('array source/target ranges differ; positional remapping unsupported')
+                if len(rhs.type.ranges) != len(typ.ranges):
+                    raise ParseError('array source/target dimensions differ')
                 if rhs.type.element != self.array_info(n).element:
                     raise ParseError('array element types differ')
-                source = self.expr(value) + ''.join(f'[{v}]' for v in vars_)
+                from .arrays import source_index
+                source = self.expr(value) + ''.join(f'[{source_index(a,b,v,self.expr)}]' for a,b,v in zip(typ.ranges,rhs.type.ranges,vars_))
             elif self.expr(value) in ("'0", "'1"):
                 source = self.expr(value)
             else:
@@ -220,6 +246,9 @@ class Generator:
 
     def statement(self, n, context):
         d = n.data
+        if n.kind=='while':
+            if context!='function':raise ParseError('while supported only inside bounded RTL functions')
+            return ['while ('+self.expr(d['condition'])+') begin']+self.indent(self.statements(n.children,context))+['end']
         if n.kind == 'unsupported':
             return self.warn(n, d['reason'])
         if n.kind == 'null':
@@ -239,7 +268,7 @@ class Generator:
                 raise ParseError('variable requires :=')
             if sym.kind != 'variable' and d['op'] == ':=':
                 raise ParseError('signal requires <=')
-            lhs, rhs = self.expr(target), self.expr(d['value'])
+            lhs, rhs = self.expr(target), self.assignment_expr(target,d['value'])
             op = '<=' if context == 'clocked' and d['op'] == '<=' else '='
             return [f'{"assign " if context == "concurrent" else ""}{lhs} {op} {rhs};']
         if n.kind == 'if':
@@ -426,13 +455,14 @@ class Generator:
                     if len(pair[0]) != 1:
                         raise ParseError('partial port association unsupported')
                     expr = '' if words(pair[1]).lower() == 'open' else self.expr(pair[1])
-                    mapped.append(f'.{identifier(pair[0][0].text.lower())}({expr})')
+                    formal=pair[0][0].text.upper() if n.data.get('vendor_module') else pair[0][0].text.lower()
+                    mapped.append(f'.{identifier(formal)}({expr})')
                 elif part:
                     mapped.append(self.expr(part))
             maps[kind] = mapped
         param = ' #(\n' + '\n'.join(self.indent([',\n'.join(maps['generic'])])) + '\n)' if 'generic' in maps else ''
         # Interface identifiers use a canonical lowercase convention for external modules.
-        return [f'{identifier(module.lower())}{param} {identifier(n.name)} ('] + self.indent([',\n    '.join(maps.get('port', []))]) + [');']
+        return [f'{identifier(n.data.get("vendor_module",module.lower()))}{param} {identifier(n.name)} ('] + self.indent([',\n    '.join(maps.get('port', []))]) + [');']
 
     def imports(self, names):
         lines = []
@@ -472,7 +502,8 @@ class Generator:
                                 actual=pair[-1]
                                 direction=dict(signature).get(formal) if formal else signature[position][1] if position<len(signature) else ''
                                 if direction in ('out','inout','buffer') and actual and actual[0].text.isidentifier() and actual[0].lower!='open':
-                                    outputs.add(actual[0].lower)
+                                    for item in split(actual,'&'):
+                                        if item and item[0].text.isidentifier() and item[0].lower!='open':outputs.add(item[0].lower)
                             break
                 visit(node.children)
                 for _,body in node.data.get('branches',[]):visit(body)
@@ -494,6 +525,8 @@ class Generator:
         return names
 
     def generate(self, design):
+        from .prepare import prepare
+        prepare(design,getattr(self,'source_path',None))
         lines = ['// Generated by HDLConvert. Review conversion diagnostics before synthesis.']
         units = design.units
         # Body declarations are merged with headers before symbol resolution.
@@ -520,6 +553,9 @@ class Generator:
             if len(arches) != 1:
                 raise ParseError(f'entity {e.name}: expected one architecture, found {len(arches)}; use --architecture')
             a = arches[0]
+            from .validation import validate_drivers
+            validate_drivers(a,entities)
+            self.symbols.unsigned_arithmetic=a.data.get('unsigned_arithmetic',False)
             imports = self.imports(e.data['imports'] + a.data['imports'])
             child_outputs = self.child_output_targets(a, entities)
             conflict = child_outputs & self.assigned_signal_targets(a.children)
@@ -551,7 +587,12 @@ class Generator:
                         declaration.data['omit_redundant_initializer'] = True
                         self.diagnostics.append(Diagnostic(declaration.line,f'declaration initializer omitted for child output {declaration.name}'))
             lines += self.indent(self.declarations(declarations))
-            lines += self.indent(self.statements(a.children, 'concurrent')) + ['endmodule', '']
+            for r in a.data.get('interface_ranges',[]):self.symbols.check_range(r,self.expr)
+            lines += self.indent(self.statements(a.children, 'concurrent'))
+            for i,(left,direction,right) in enumerate(self.symbols.range_checks):
+                lines+=self.indent(['generate',f'if (({left}) {"<" if direction=="downto" else ">"} ({right})) begin : hdl_range_{i}',
+                    '    HDLConvert_NULL_RANGE_UNSUPPORTED invalid_range();','end','endgenerate'])
+            lines += ['endmodule', '']
         for u in units:
             if u.kind == 'unsupported':
                 lines += self.warn(u, u.data['reason'])

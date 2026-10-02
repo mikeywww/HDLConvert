@@ -42,6 +42,7 @@ class Declaration:
     line: int = 1
     source: str = ''
     init_policy: InitPolicy = InitPolicy.UNCERTAIN
+    attributes: list = field(default_factory=list)
 
 
 @dataclass

@@ -12,6 +12,6 @@ set initialized 0
 foreach cell [get_cells -hier -filter {REF_NAME =~ FD*}] {
     if {[get_property INIT $cell] == "1'b1"} { incr initialized }
 }
-if {$initialized == 0} { error "Expected register INIT=1 was lost" }
-puts "INITIALIZER_SYNTHESIS_PASS: no MDRV-1, register INIT=1 preserved"
+if {$initialized != 0} { error "Unexpected preserved declaration INIT=1" }
+puts "INITIALIZER_SYNTHESIS_PASS: no MDRV-1, declaration INIT=1 removed"
 close_project

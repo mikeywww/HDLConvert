@@ -88,18 +88,17 @@ class SixDirections(unittest.TestCase):
         self.assertIn('output reg q',r.text)
         self.assertIn('localparam [1:0] RUN = 1;',r.text)
         self.assertIn('reg [1:0] state;',r.text)
-    def test_width_mismatch_and_preserved_init(self):
+    def test_all_declaration_init_removed_without_comments(self):
         from hdl.api import convert_text
         src="entity m is port(clk:in std_logic); end; architecture rtl of m is signal a,b:std_logic:='0'; signal fff:std_logic_vector(3 downto 0):=x\"000\"; begin process(clk) begin if rising_edge(clk) then a<=not a; b<=a; end if; end process; end;"
         r=convert_text(src,source_language='vhdl')
-        messages=' '.join(d.message for d in r.diagnostics)
-        self.assertIn('width 12 does not match signal width 4: fff',messages)
-        self.assertIn('PRESERVE',messages)
-        self.assertIn("logic a = 1'b0",r.text)
-        self.assertIn("logic b = 1'b0",r.text)
+        self.assertFalse(r.diagnostics)
+        self.assertIn('logic a;',r.text)
+        self.assertIn('logic b;',r.text)
         self.assertIn('logic [3:0] fff;',r.text)
         self.assertNotIn('declaration initialization preserved:',r.text)
         self.assertNotIn('power-up behavior may depend',r.text)
+        self.assertNotIn('TODO',r.text)
     def test_unsupported_preserves_source(self):
         from hdl.api import convert_text
         source='module m(); initial #5 $finish; endmodule'

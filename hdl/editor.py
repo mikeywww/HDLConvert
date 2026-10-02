@@ -79,7 +79,7 @@ class CodeEditor(ttk.Frame):
 
 class EditorApp:
     def __init__(self,root,dnd_type=None):
-        self.root=root;self.busy=False;self.events=queue.Queue();self.path=None;self.output_language=None
+        self.root=root;self.busy=False;self.events=queue.Queue();self.path=None;self.output_language=None;self.output_complete=True
         root.title('HDLConvert')
         screen_width=root.winfo_screenwidth();screen_height=root.winfo_screenheight()
         width=min(1320,max(900,screen_width-80))
@@ -111,9 +111,9 @@ class EditorApp:
         left=ttk.Labelframe(editors,text='源代码',padding=1);right=ttk.Labelframe(editors,text='转换结果',padding=1)
         editors.add(left,weight=1);editors.add(right,weight=1)
         self.status=tk.StringVar(value='就绪')
-        self.source=CodeEditor(left,lambda pos:self.status.set('源代码  行 '+pos.replace('.', '，列 ')))
+        self.source=CodeEditor(left,lambda pos:self.cursor_status('源代码',pos))
         self.source.pack(fill='both',expand=True)
-        self.output=CodeEditor(right,lambda pos:self.status.set('转换结果  行 '+pos.replace('.', '，列 ')))
+        self.output=CodeEditor(right,lambda pos:self.cursor_status('转换结果',pos))
         self.output.pack(fill='both',expand=True)
         logs=ttk.Labelframe(panes,text='警告 / 转换日志',padding=3);panes.add(logs,weight=1)
         self.log=tk.Text(logs,height=7,wrap='word',state='disabled',font=('Consolas',10),background='white',relief='flat')
@@ -129,6 +129,11 @@ class EditorApp:
         root.bind('<Control-s>',lambda _:self.save_as())
         root.bind('<F5>',lambda _:self.convert())
         root.protocol('WM_DELETE_WINDOW',self.close);root.after(80,self.poll)
+    def cursor_status(self,label,pos):
+        if self.busy:return
+        if not self.output_complete:
+            self.status.set('转换失败 — 输出仅供诊断，不能保存为 HDL')
+        else:self.status.set(label+'  行 '+pos.replace('.', '，列 '))
     def append_log(self,message):
         self.log.configure(state='normal');self.log.insert('end',message+'\n');self.log.see('end');self.log.configure(state='disabled')
     def open_file(self):
@@ -142,6 +147,7 @@ class EditorApp:
             if path.suffix.lower() not in ('.vhd','.vhdl','.v','.sv'):raise ValueError('不支持的文件扩展名')
             source=read_source(path);lang=detect_language(source,path)
             self.path=path;self.source.set(source);self.source_language.set(NAMES[lang]);self.output.set('');self.output_language=None
+            self.output_complete=True
             self.status.set(str(path));self.append_log('信息：已打开 '+str(path))
             if LABELS[self.target_language.get()]==lang:self.target_language.set('VHDL' if lang!='vhdl' else 'SystemVerilog')
         except (OSError,ValueError) as exc:self.append_log('错误：'+str(exc))
@@ -163,8 +169,9 @@ class EditorApp:
         self.busy=True;self.status.set('正在转换 '+NAMES[src]+' → '+NAMES[dst]+'…')
         for c in self.controls:c.configure(state='disabled')
         self.source_combo.configure(state='disabled');self.target_combo.configure(state='disabled')
+        source_path=self.path
         def work():
-            try:self.events.put(('result',convert_text(source,source_language=src,target_language=dst),dst))
+            try:self.events.put(('result',convert_text(source,source_language=src,target_language=dst,source_path=source_path),dst))
             except Exception as exc:self.events.put(('error',str(exc),dst))
         threading.Thread(target=work,daemon=True).start()
     def poll(self):
@@ -173,10 +180,13 @@ class EditorApp:
                 kind,value,dst=self.events.get_nowait()
                 if kind=='result':
                     self.output.set(value.text);self.output_language=dst
+                    self.output_complete=value.complete
                     for diagnostic in value.diagnostics:self.append_log(str(diagnostic))
-                    self.status.set(f'转换完成 — {len(value.diagnostics)} 个警告')
+                    self.status.set(f'转换完成 — {len(value.diagnostics)} 个警告' if value.complete else '转换失败 — 输出仅供诊断，不能保存为 HDL')
                     self.append_log('信息：'+self.status.get())
-                else:self.append_log('错误：'+value);self.status.set('转换失败')
+                else:
+                    self.output_complete=False;self.output.set('');self.output_language=None
+                    self.append_log('错误：'+value);self.status.set('转换失败')
                 self.busy=False
                 for c in self.controls:c.configure(state='normal')
                 self.source_combo.configure(state='readonly');self.target_combo.configure(state='readonly')
@@ -184,6 +194,7 @@ class EditorApp:
         self.root.after(80,self.poll)
     def save_as(self):
         if self.busy:return
+        if not getattr(self,'output_complete',True):self.append_log('错误：转换不完整，不能保存为有效 HDL。');return
         if not self.output.get().strip():self.append_log('警告：没有可保存的转换结果。');return
         dst=self.output_language or LABELS[self.target_language.get()];suffix=SUFFIX[dst]
         path=filedialog.asksaveasfilename(defaultextension=suffix,initialfile=(self.path.stem if self.path else 'converted')+suffix,filetypes=[(NAMES[dst],'*'+suffix)])
@@ -199,6 +210,7 @@ class EditorApp:
     def clear(self):
         if self.busy:return
         self.source.set('');self.output.set('');self.path=None;self.output_language=None
+        self.output_complete=True
         self.log.configure(state='normal');self.log.delete('1.0','end');self.log.configure(state='disabled');self.status.set('就绪')
     def close(self):
         if self.busy:self.append_log('信息：请等待转换完成后再关闭。')

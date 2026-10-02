@@ -66,14 +66,14 @@ if(y!==(i==0?42:((i+1)&255)))$fatal(1,"early return");end
 $display("PASS");$finish;end endmodule''')
 
     @unittest.skipUnless(test_hdl_sim.IVERILOG,'Icarus is optional')
-    def test_vhdl_array_powerup_and_nonzero_reset(self):
+    def test_vhdl_array_init_removed_and_nonzero_range_reset(self):
         code="""entity m is port(clk:in std_logic;y:out std_logic_vector(7 downto 0));end;
 architecture rtl of m is type arr is array(3 to 5) of std_logic_vector(7 downto 0);
 signal a:arr :=(others=>(others=>'1'));
 begin y<=a(4);process(clk)begin if rising_edge(clk)then a<=(others=>(others=>'0'));end if;end process;end;"""
         test_hdl_sim.HDLCompilerTests().simulate(code,'vhdl','verilog',
             '''module tb;reg clk=0;wire[7:0]y;m dut(clk,y);
-initial begin #1;if(y!==8'hff)$fatal(1,"array init");clk=1;#1;
+initial begin #1;if(y!==8'hxx)$fatal(1,"unexpected array init");clk=1;#1;
 if(y!==0)$fatal(1,"array reset");$display("PASS");$finish;end endmodule''',warnings=True)
 
     def test_runtime_two_state_storage_stays_unsupported(self):

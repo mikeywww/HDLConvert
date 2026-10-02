@@ -3,12 +3,18 @@ from pathlib import Path
 import os
 import shutil
 import subprocess
+import struct
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT))
 
 
 def main():
+    image=(ROOT/'dist'/'HDLConvert.exe').read_bytes()
+    pe=struct.unpack_from('<I',image,0x3c)[0]
+    if struct.unpack_from('<H',image,pe+24+68)[0]!=2:raise RuntimeError('EXE is not a Windows GUI subsystem executable')
     env = {k: v for k, v in os.environ.items()
            if not k.upper().startswith(('PYTHON', 'TCL', 'TK_LIBRARY', 'VIRTUAL_ENV'))}
     env['PATH'] = str(Path(env['SYSTEMROOT'])/'System32')
@@ -30,7 +36,7 @@ def main():
                 raise RuntimeError(log[-1])
             return result
 
-        if '2.0.4' not in run(['--version']).stdout:
+        if '2.0.5' not in run(['--version']).stdout:
             raise RuntimeError('version missing')
         if 'MIT License' not in run(['--licenses']).stdout:
             raise RuntimeError('notices missing')
@@ -96,6 +102,21 @@ signal q:std_logic:='0';begin u:child port map(q=>q);y<=q;end;''', encoding='utf
         run([bad, '--target', 'vhdl', '-o', preserved], expected=1)
         if preserved.read_text(encoding='utf-8') != 'keep':
             raise RuntimeError('failed conversion overwrote output')
+        # Verify this repair batch actually reached the frozen application.
+        from scripts.audit_vhdl import CASES
+        for name in ('partial_formal','generic_port_fill','function_multiple_widths','attributes'):
+            source=folder/(name+'.vhd');source.write_text(CASES[name],encoding='utf-8')
+            for target,ext in (('verilog','.v'),('systemverilog','.sv')):
+                output=source.with_suffix(ext);run([source,'--target',target,'-o',output])
+                text=output.read_text(encoding='gb2312')
+                if name=='function_multiple_widths' and 'f__hdl_1' not in text:raise RuntimeError('multiwidth specialization absent from EXE')
+                if name=='attributes' and 'ASYNC_REG' not in text:raise RuntimeError('attribute absent from EXE')
+        for name in ('unsupported_removal','multiple_process_drivers','null_range'):
+            source=folder/(name+'.vhd');source.write_text(CASES[name],encoding='utf-8')
+            for target,ext in (('verilog','.v'),('systemverilog','.sv')):
+                output=source.with_suffix(ext);output.write_text('keep',encoding='utf-8')
+                run([source,'--target',target,'-o',output],expected=1)
+                if output.read_text()!='keep':raise RuntimeError('incomplete EXE conversion overwrote valid output')
     (ROOT/'build'/'release-verification.log').write_text('\n'.join(log), encoding='utf-8')
     print('PASS: isolated EXE version/licenses, native editor/DnD, GBK input, Unicode path, legacy golden output, DDR3 and child-output VHDL-to-Verilog, process fragment, new directions and failure preservation')
 

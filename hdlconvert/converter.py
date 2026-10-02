@@ -14,12 +14,13 @@ class ConversionResult:
     text: str
     diagnostics: list
     output_path: Path | None = None
+    complete: bool = True
 
 
 def convert_text(source, *, top=None, architecture=None, generics=None):
     generator = Generator(top, architecture, {k.lower(): tokenize(str(v)) for k, v in (generics or {}).items()})
     output = generator.generate(Parser(source).parse())
-    return ConversionResult(output, generator.diagnostics)
+    return ConversionResult(output, generator.diagnostics, complete=not generator.incomplete)
 
 
 def convert_file(input_path, output_path=None, *, dependencies=(), strict=False,
@@ -36,6 +37,7 @@ def convert_file(input_path, output_path=None, *, dependencies=(), strict=False,
     # but generate dependencies first to populate the package symbol registry.
     generator = Generator(options.get('top'), options.get('architecture'),
                           {k.lower(): tokenize(str(v)) for k, v in options.get('generics', {}).items()})
+    generator.source_path=source
     for path in dependencies:
         dep = Path(path).resolve()
         if dep != source:
@@ -47,7 +49,9 @@ def convert_file(input_path, output_path=None, *, dependencies=(), strict=False,
             generator.generate(parsed)
             generator.top, generator.architecture = old_top, old_arch
     text = generator.generate(Parser(read_source(source)).parse())
-    result = ConversionResult(text, generator.diagnostics, output)
+    result = ConversionResult(text, generator.diagnostics, output, not generator.incomplete)
+    if not result.complete:
+        raise ParseError('incomplete conversion; output was not written: '+str(result.diagnostics[-1]))
     if strict and result.diagnostics:
         raise ParseError(f'{len(result.diagnostics)} warning(s); strict mode did not write output')
     output.parent.mkdir(parents=True, exist_ok=True)

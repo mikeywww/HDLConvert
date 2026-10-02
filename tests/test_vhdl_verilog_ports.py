@@ -20,9 +20,9 @@ end architecture;'''
         self.assertNotIn('No complete target design emitted', result.text)
         self.assertIn('wire [23:0] child_q;', result.text)
         self.assertNotIn('wire [23:0] child_q =', result.text)
-        self.assertIn("reg [15:0] stored = 16'h0;", result.text)
+        self.assertIn('reg [15:0] stored;', result.text)
         self.assertIn('.q(child_q)', result.text)
-        self.assertTrue(any('initializer omitted for child output child_q' in d.message for d in result.diagnostics))
+        self.assertFalse(result.diagnostics)
 
     def test_positional_output_slice_and_compact_hex(self):
         source = '''entity parent is port(clk: in std_logic; y: out std_logic_vector(23 downto 0)); end;
@@ -36,7 +36,7 @@ y <= x"00" & bus_q;
 end;'''
         result = convert_text(source, source_language='vhdl', target_language='verilog')
         self.assertIn('wire [15:0] bus_q;', result.text)
-        self.assertIn("reg [23:0] init_q = 24'h1aa;", result.text)
+        self.assertIn('wire [23:0] init_q;', result.text)
         self.assertIn("{8'h0, bus_q}", result.text)
 
     def test_standalone_process_fragment(self):
@@ -93,7 +93,7 @@ u:entity work.unknown port map(q=>q);y<=q;end;'''
 architecture rtl of p is component c is port(q:out std_logic); end component;
 signal q:std_logic; begin u:c port map(q=>q); q<='1'; end;'''
         result = convert_text(source, source_language='vhdl', target_language='verilog')
-        self.assertIn('child output has an additional parent driver', result.text)
+        self.assertIn('multiple or mixed drivers for q', result.text)
         self.assertIn('No complete target design emitted', result.text)
 
 

@@ -114,7 +114,7 @@ class ExprParser:
             value, meta = self.conv.typed(self.group())
         elif re.fullmatch(r"'[01xXzZ-]'", t.text):
             value = "1'b" + ('x' if t.text[1] == '-' else t.text[1].lower())
-            meta = ('bits', '1')
+            meta = ('scalar', '1')
         elif re.fullmatch(r'[xXbBoO]?"[0-9a-fA-FxXzZ_\-]+"', t.text) or re.fullmatch(r"[xXbBoO]'[0-9a-fA-F_]+'", t.text):
             prefix = t.text[0].lower() if t.text[0] != '"' else 'b'
             digits = t.text[2:-1].replace('_', '').replace('-', 'x') if t.text[0]!='"' else t.text[1:-1].replace('_', '').replace('-', 'x')
@@ -147,7 +147,8 @@ class ExprParser:
             symbol = self.conv.symbols.find(t.text)
             value = self.conv.symbols.resolve(t.text)
             if symbol and symbol.type.vector:
-                meta = ('signed' if symbol.type.signed else ('unsigned' if symbol.type.vhdl.lower() == 'unsigned' else 'bits'), f'$bits({value})')
+                numeric_unsigned=symbol.type.vhdl.lower()=='unsigned' or self.conv.symbols.unsigned_arithmetic and symbol.type.vhdl.lower()=='std_logic_vector'
+                meta = ('signed' if symbol.type.signed else ('unsigned' if numeric_unsigned else 'bits'), f'$bits({value})')
             if self.peek() == '(' and not (symbol and symbol.kind != 'function'):
                 args_raw = split(self.group())
                 typed_args = [self.conv.typed(a) for a in args_raw if a]
@@ -160,6 +161,12 @@ class ExprParser:
                 elif n in ('to_unsigned', 'to_signed') and len(args) == 2:
                     value = f"${'signed' if n == 'to_signed' else 'unsigned'}(({args[1]})'({args[0]}))"
                     meta = (n[3:], args[1])
+                elif n in ('shift_left','shift_right') and len(args)==2:
+                    kind=self.conv.numeric_kind(args_raw[0])
+                    if kind not in ('signed','unsigned'):raise ParseError('shift argument requires signed/unsigned type')
+                    meta=typed_args[0][1]
+                    op='<<' if n=='shift_left' else '>>>' if kind=='signed' else '>>'
+                    value=self.sized(f'({args[0]} {op} {args[1]})',meta)
                 elif n == 'resize':
                     if len(args) != 2:
                         raise ParseError('resize requires two arguments')
@@ -204,7 +211,7 @@ class ExprParser:
                             elem = symbol.type.element
                             meta = ('signed' if elem.signed else ('unsigned' if elem.vhdl == 'unsigned' else 'bits'), f'$bits({value})')
                         else:
-                            meta = ('bits', '1')
+                            meta = ('scalar', '1')
             elif self.peek() == '.':
                 self.pop()
                 value += '.' + identifier(self.pop().text.lower())
@@ -246,11 +253,21 @@ class ExprParser:
                 meta = None
             elif op == '&':
                 if meta and right_meta:
-                    kind = meta[0] if meta[0] == right_meta[0] else 'bits'
+                    kind = meta[0] if meta[0] == right_meta[0] and meta[0] != 'scalar' else 'bits'
                     meta = (kind, f'({meta[1]})+({right_meta[1]})')
                 else:
                     meta = ('bits', f'$bits({value})')
             elif op in ('+', '-', '*', '/', 'mod', 'rem', '**', 'sll', 'srl') and (meta or right_meta):
+                # numeric_std vector +/- STD_ULOGIC: zero/one is a scalar
+                # increment, not a second signed/unsigned vector overload.
+                scalar_numeric = None
+                if op in ('+','-') and meta and right_meta:
+                    if meta[0] in ('signed','unsigned') and right_meta[0]=='scalar':scalar_numeric=meta
+                    elif right_meta[0] in ('signed','unsigned') and meta[0]=='scalar':scalar_numeric=right_meta
+                if scalar_numeric:
+                    meta=scalar_numeric
+                    value=self.sized(value,meta)
+                    continue
                 numeric = meta or right_meta
                 if op not in ('sll', 'srl') and (numeric[0] == 'bits' or (right_meta and right_meta[0] == 'bits')):
                     raise ParseError('vector arithmetic requires explicit signed/unsigned type')

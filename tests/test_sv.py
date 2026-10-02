@@ -32,14 +32,14 @@ class SystemVerilogTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn('PASS', proc.stdout)
 
-    def test_combinational_initializers_and_register_powerup(self):
+    def test_combinational_evaluation_and_uninitialized_register(self):
         source = Path('tests/vhdl/initializer_drivers.vhd').read_text()
         self.simulate(source, '''module tb;
           logic clk=0,d=0,en=0;wire ready,comb,stored;
           initializer_drivers dut(.*);
           initial begin #1;
-            if(ready!==0 || comb!==1 || stored!==1)$fatal(1,"initial values");
-            d=1;en=1;#1;if(ready!==1 || comb!==0 || stored!==1)$fatal;
+            if(ready!==0 || comb!==1 || stored!==1'bx)$fatal(1,"initial values");
+            d=1;en=1;#1;if(ready!==1 || comb!==0 || stored!==1'bx)$fatal;
             clk=1;#1;if(stored!==0)$fatal;
             clk=0;d=0;#1;clk=1;#1;if(stored!==1)$fatal;
             $display("PASS");$finish;

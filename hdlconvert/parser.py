@@ -5,6 +5,8 @@ import re
 
 
 def parse_range(tokens):
+    if len(tokens) >= 2 and tokens[-1].text == '<>' and tokens[-2].lower == 'range':
+        return Range([], 'unconstrained', [])
     for direction in ('to', 'downto'):
         parts = split(tokens, direction)
         if len(parts) == 2 and all(parts):
@@ -177,6 +179,10 @@ class Parser:
                     body = self.statements()
                     self.finish('function', name)
                     out.append(self.node('function', start, name, {'args': args, 'type': ret, 'decl': decl}, body))
+            elif tag == 'attribute':
+                self.pop();name=self.pop().text
+                ts=self.until(';');self.pop(';')
+                out.append(self.node('attribute',start,name,{'tokens':ts}))
             elif tag == 'component':
                 self.pop()
                 name = self.pop().text
@@ -241,6 +247,10 @@ class Parser:
                 self.finish(ending, label)
                 result.append(self.node('generate' if ending == 'generate' else 'for', start,
                                         label, {'variable': var, 'range': rng}, body))
+            elif tag == 'while':
+                self.pop();condition=self.until('loop');self.pop('loop')
+                body=self.statements();self.finish('loop',label)
+                result.append(self.node('while',start,label,{'condition':condition},body))
             elif tag == 'case':
                 self.pop()
                 expr = self.until('is')
@@ -303,7 +313,11 @@ class Parser:
                 if tag == 'use':
                     if len(ts) == 5 and ts[0].lower == 'work' and ts[-1].lower == 'all':
                         imports.append(ts[2].text)
-                    elif not (ts and ts[0].lower == 'ieee' and len(ts) >= 3 and ts[2].lower in ('std_logic_1164', 'numeric_std')):
+                    elif [t.lower for t in ts]==['ieee','.','std_logic_unsigned','.','all']:
+                        imports.append('__hdl_unsigned_arithmetic')
+                    elif [t.lower for t in ts]==['unisim','.','vcomponents','.','all']:
+                        units.append(self.node('vendor_import',start,data={'library':'unisim'}))
+                    elif not (ts and ts[0].lower == 'ieee' and len(ts) >= 3 and ts[2].lower in ('std_logic_1164', 'numeric_std','std_logic_unsigned','std_logic_arith')):
                         units.append(self.node('unsupported', start, data={'reason': 'unsupported library import'}))
             elif tag == 'entity':
                 name = self.pop().text

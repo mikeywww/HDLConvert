@@ -81,23 +81,19 @@ python hdlconvert.py design.vhd --target systemverilog --dependency types.vhd --
 | FSM | VHDL enum；SV enum；Verilog localparam 降级 |
 | 运算 | 加减乘除、比较、逻辑、常用移位和已知位宽转换 |
 
-单独粘贴一个完整的 VHDL `process` 块也可转换为 `always` 代码段。代码段依赖粘贴位置已有的信号声明；无从推断索引/聚合位宽时会要求提供完整 entity/architecture。子模块端口方向可由同文件 entity 或 component 声明识别；连接子模块输出的父模块信号/输出端口在 Verilog 中生成为 `wire`，在 SystemVerilog 中使用 `logic`，其声明初值会移除并在日志提示。缺少子模块接口信息时，VHDL→Verilog 拒绝猜测端口方向。
+单独粘贴一个完整的 VHDL `process` 块也可转换为 `always` 代码段。代码段依赖粘贴位置已有的信号声明；无从推断索引/聚合位宽时会要求提供完整 entity/architecture。子模块端口方向可由同文件 entity、component 声明或同目录同名 VHDL 文件识别；连接子模块输出的父模块信号/输出端口在 Verilog 中生成为 `wire`，在 SystemVerilog 中使用 `logic`。缺少子模块接口信息时，VHDL→Verilog 拒绝猜测端口方向。
 
-VHDL `x"0001aa"` 转为保留原位宽的 `24'h1aa`；16 位全零初值使用 `16'h0`。也兼容 `x'0001aa'` 写法。静态全零重复拼接 `{32{1'b0}}` 简化为 `32'b0`；参数化宽度保留重复拼接以支持 generic/parameter 覆盖。`'0'`、`'1'` 仍按目标上下文转换为合适的常量。
+VHDL `x"0001aa"` 转为保留原位宽的 `24'h1aa`，也兼容 `x'0001aa'` 写法。静态全零重复拼接 `{32{1'b0}}` 简化为 `32'b0`；参数化宽度保留重复拼接以支持 generic/parameter 覆盖。`'0'`、`'1'` 按目标上下文转换为常量；支持 unsigned 或 std_logic_unsigned 计数器的 `cnt <= cnt + '1'`。
 
-VHDL→SystemVerilog 还支持固定一/二维数组、非零/降序数组范围、整体数组循环复制、简单 package/function/record/subtype、numeric_std 常见转换和 selected assignment。Verilog/SV 路径支持 DDR3 示例生成结果中的 function、固定数组、packed struct、局部静态变量及数组默认初值。完整 case 译码在 Verilog 中使用连续函数调用，保留启动时求值。跨语言互转仅对受支持的 RTL 子集保留功能，不承诺任意 SV 语法、注释或格式无损。运行时二值 `bit` 存储、复杂静态函数状态等不支持的结构会明确拒绝。
+VHDL→Verilog/SV 支持固定一/二维数组、非零/降序范围及同长度不同边界的逐元素位置对应；整数组复制展开为循环。简单 package 常量、类型和函数在 Verilog 中内联；SV 保留 package。支持常见 numeric_std 转换、selected assignment、完整静态端口分片关联、generic 相关端口填充值和信号字符串属性。无约束 vector 函数可按已证明的参数及函数体返回边界生成不同位宽版本；复杂返回推导仍拒绝。简单无反馈的 `process(all)` signal 赋值链降低为连续方程；带分支、反馈或显式 sensitivity 的复杂 delta 依赖仍拒绝。
+
+Verilog/SV 路径支持 DDR3 示例生成结果中的 function、固定数组、packed struct 和局部静态变量。完整 case 译码在 Verilog 中使用连续函数调用，保留启动时求值。跨语言互转仅对受支持的 RTL 子集保留功能，不承诺任意 SV 语法、注释或格式无损。运行时二值 `bit` 存储、复杂静态函数状态等结构会明确拒绝。
 
 ## 声明初值
 
-VHDL 信号声明初值按三类处理：
+VHDL→Verilog/SV 统一省略所有 signal 和 process variable 的声明初值，不生成初始化注释或 `initial` 块。常量值、generic 默认值和 reset 分支中的赋值保留。函数局部变量每次调用所需的初值改为函数体开头的普通赋值，按声明顺序计算，声明本身不带初值。
 
-- `SAFE_REMOVE`：能证明整个组合信号被完整、非反馈地驱动，为避免初始化和逻辑驱动冲突而静默省略初值。
-- `PRESERVE`：代码读取或反馈依赖该值，保留上电初值。
-- `UNCERTAIN`：不能证明安全删除，优先保留并输出 warning。
-
-子模块输出端口连接的父模块声明不参与此保留规则：输出端口已经驱动该网络，声明初值将移除；日志会指出具体信号。若父模块还对同一信号赋值，转换拒绝生成多驱动结果。
-
-process 变量只有在每条可能读取路径上都先经过完整赋值时才静默省略声明初值；先读后写、分支漏赋值及部分赋值继续保留。reset 分支是 RTL 功能逻辑，绝不会作为声明初值被删除。静态可计算的位宽不匹配会报告，例如 4 bit 信号赋 12 bit `x"000"`，并拒绝生成猜测性的初始化。该分析不是完整的多驱动、锁存或形式等价证明。
+输出 RTL 的寄存器初态应由显式 reset/赋值建立。如果原设计只依赖声明初值而没有复位，删除后其上电行为会改变；这是当前输出策略。Verilog/SV 输入的已有初始化仍按原语言语义保留。
 
 ## 不支持和保守拒绝
 
@@ -105,11 +101,11 @@ process 变量只有在每条可能读取路径上都先经过完整赋值时才
 
 遇到不能可靠转换的结构时：
 
-- 文本 API 返回 WARNING/TODO 和注释后的原始代码；
-- 文件 API/CLI 不写出不完整设计，也不覆盖现有输出；
+- 文本 API 设置 `ConversionResult.complete=False`，返回 ERROR 诊断和注释后的原始代码，不把漏逻辑的模块作为成功结果；
+- 文件 API/CLI 默认拒绝保存不完整转换；GUI 显示失败，并禁止把诊断草稿另存为 HDL；
 - 可用 `--strict` 阻止任何带 warning 的输出。
 
-声明初值的 `PRESERVE` / `UNCERTAIN` 提示只写入 GUI/CLI 日志，不再插入生成的 HDL 文件。
+多 process、process 与连续赋值或多个子模块输出的重叠驱动会拒绝。已证明分离的静态区域和互斥布尔 generate 可通过检查，但复杂 resolved-net/三态或条件所有权不做完整分析。静态空范围拒绝；参数化范围附带展开检查，参数覆盖产生空范围时触发编译/展开错误，防止变成错误的非零位宽。
 
 Verilog/SV 与 VHDL 在 process 启动、delta cycle、四值/九值逻辑、unsized literal、signedness 和表达式位宽上存在语言差异。工具只在能够明确映射时转换；warning 输出必须人工复核并通过工程级仿真/综合验收。
 

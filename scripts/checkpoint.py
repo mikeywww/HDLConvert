@@ -62,8 +62,8 @@ def checkpoint(stage, completed, files, tests, issues, next_step, history, mail=
 
 ## 验证命令
 ```powershell
-python -m unittest -v
-python hdlconvert.py tests/vhdl/array_test.vhd -o build/array_test.sv
+.\\.venv\\Scripts\\python.exe -m unittest -v
+.\\.venv\\Scripts\\python.exe hdlconvert.py tests/vhdl/array_test.vhd -o build/array_test.sv
 ```
 {tests}
 

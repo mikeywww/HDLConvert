@@ -25,11 +25,11 @@ class HDLCompilerTests(unittest.TestCase):
             p=subprocess.run([str(Path(IVERILOG).with_name('vvp.exe' if os.name=='nt' else 'vvp')),str(d/'sim')],capture_output=True,text=True,env=env,timeout=30)
             self.assertEqual(p.returncode,0,p.stdout+p.stderr)
             self.assertIn('PASS',p.stdout)
-    def test_vhdl_numeric_cast_and_powerup(self):
-        self.simulate('''entity m is port(clk:in std_logic;q:out unsigned(7 downto 0));end;
+    def test_vhdl_numeric_cast_and_explicit_reset(self):
+        self.simulate('''entity m is port(clk,rst:in std_logic;q:out unsigned(7 downto 0));end;
 architecture rtl of m is signal c:unsigned(7 downto 0):=(others=>'0');
-begin process(clk)begin if rising_edge(clk)then c<=c+1;end if;end process;q<=c;end;''','vhdl','verilog',
-'''module tb;reg clk=0;wire[7:0]q;integer k;m dut(clk,q);initial begin #1;if(q!==0)$fatal;
+begin process(clk,rst)begin if rst='1' then c<=(others=>'0');elsif rising_edge(clk)then c<=c+1;end if;end process;q<=c;end;''','vhdl','verilog',
+'''module tb;reg clk=0,rst=0;wire[7:0]q;integer k;m dut(clk,rst,q);initial begin #1;rst=1;#1;if(q!==0)$fatal;rst=0;#1;
 for(k=1;k<=512;k=k+1)begin clk=1;#1;if(q!==(k&255))$fatal(1,"counter wrap");clk=0;#1;end
 $display("PASS");$finish;end endmodule''',warnings=True)
     def test_sv_enum_generate_and_instances(self):

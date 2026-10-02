@@ -19,6 +19,7 @@ class TypeInfo:
     vector: bool = False
     element: object = None
     vhdl: str = ''
+    inline_array: bool = False
 
 
 @dataclass
@@ -31,8 +32,23 @@ class Symbol:
 class Symbols:
     def __init__(self, parent=None):
         self.parent = parent
+        self.unsigned_arithmetic=parent.unsigned_arithmetic if parent else False
         self.names = {}
         self.types = {}
+        self.constants=parent.constants.copy() if parent else {}
+        self.range_checks=[]
+
+    def check_range(self,r,expr):
+        from hdl.initialization import constant_value
+        try:
+            left,right=constant_value(r.left,self.constants),constant_value(r.right,self.constants)
+            if (left<right if r.direction=='downto' else left>right):
+                raise ParseError('null range cannot be represented in Verilog/SV')
+        except ParseError:raise
+        except (ValueError,ZeroDivisionError):pass
+        if self.parent is None and any(t.text.isidentifier() for t in r.left+r.right):
+            item=(expr(r.left),r.direction,expr(r.right))
+            if item not in self.range_checks:self.range_checks.append(item)
 
     def find(self, name):
         return self.names.get(name.lower()) or (self.parent.find(name) if self.parent else None)
@@ -61,10 +77,16 @@ class Symbols:
             if len(ref.ranges) != 1:
                 raise ParseError(f'unconstrained vector {ref.name} needs explicit bounds')
             r = ref.ranges[0]
+            self.check_range(r,expr)
             sv = 'logic' + (' signed' if n == 'signed' else '')
             sv += f' [{expr(r.left)}:{expr(r.right)}]'
             return TypeInfo(sv, signed=n == 'signed', vector=True, vhdl=n)
         typ = self.find_type(ref.name)
+        if typ and typ.inline_array:
+            if len(ref.ranges) != len(typ.ranges):
+                raise ParseError('unconstrained array needs explicit bounds: '+ref.name)
+            for r in ref.ranges:self.check_range(r,expr)
+            return TypeInfo(typ.element.sv, ref.ranges, typ.signed, False, typ.element, typ.vhdl, True)
         if typ and not ref.ranges:
             return typ
         raise ParseError(f'unknown or unsupported constrained type {ref.name}')

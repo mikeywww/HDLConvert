@@ -47,17 +47,39 @@ class Parser:
         parts = split(tokens, ':')
         if len(parts) != 2: raise ParseError('expected fixed or parameterized [left:right] range')
         return tuple(expression(p) for p in parts)
+    def attributes(self):
+        result=[]
+        while self.peek()=='(' and self.peek(1)=='*':
+            self.pop('(');self.pop('*');start=self.i;depth=0
+            while self.peek() and not (depth==0 and self.peek()=='*' and self.peek(1)==')'):
+                if self.peek() in ('(','[','{'):depth+=1
+                if self.peek() in (')',']','}'):depth-=1
+                self.pop()
+            parts=split(self.ts[start:self.i]);self.pop('*');self.pop(')')
+            for part in parts:
+                if not part or not re.fullmatch(r'[a-zA-Z_][$\w]*',part[0].text):raise ParseError('unsupported attribute name')
+                if len(part)==1:value='1'
+                elif len(part)>=3 and part[1].text=='=':
+                    value=' '.join(t.text for t in part[2:])
+                    # Attribute values must be constant literals/expressions;
+                    # retain exact quoted string escapes and numerical text.
+                    if not (len(part)==3 and part[2].text.startswith('"')):expression(part[2:])
+                else:raise ParseError('unsupported attribute value')
+                result.append((part[0].text,value))
+        return result
     def declarations(self, tokens, kind='signal', direction=''):
         result, inherited = [], None
         for part in split(tokens):
             if not part: raise ParseError('empty declaration')
             p = Parser.__new__(Parser); p.ts = part; p.i = 0; p.source = self.source
+            attrs=p.attributes()
             current_dir, current_kind = direction, kind
             explicit = p.peek() in DIRECTIONS | TYPES | {'parameter','localparam'} or p.peek() in self.enums or p.peek() in self.types
             typ = Type(); net = False
             typed = False; two_state = False
             if inherited and not explicit:
-                typ, current_dir, current_kind, net = deepcopy(inherited)
+                typ, current_dir, current_kind, net, inherited_attrs = deepcopy(inherited)
+                if not attrs:attrs=inherited_attrs
             else:
                 if p.peek() in DIRECTIONS: current_dir = p.pop().text
                 if p.peek() in ('parameter','localparam'): current_kind = p.pop().text
@@ -75,7 +97,10 @@ class Parser:
                     elif word == 'unsigned': typ.signed = False
                     elif word == 'wire': net = True
                 if p.peek() == '[': typ.bounds = self.range(p.group('[',']'))
-                inherited = (deepcopy(typ), current_dir, current_kind, net)
+                if typed and current_kind in ('parameter','localparam') and typ.kind=='bits' and not typ.bounds and not typ.enum:
+                    # A typed scalar parameter stays one bit under overrides.
+                    typ.bounds=(Expr('literal','0'),Expr('literal','0'))
+                inherited = (deepcopy(typ), current_dir, current_kind, net, attrs)
             name = p.pop().text
             if not re.fullmatch(r'[a-zA-Z_][$\w]*|\\\S+', name): raise ParseError(f'unsupported identifier {name}')
             while p.peek() == '[': typ.dimensions.append(self.range(p.group('[',']')))
@@ -91,7 +116,7 @@ class Parser:
                 except (ValueError,AttributeError):raise ParseError('bit parameter requires a known constant value')
             if p.peek(): raise ParseError(f'unsupported declaration suffix {p.peek()}')
             result.append(Declaration(name, typ, current_kind, current_dir, value, net, part[0].line,
-                                      self.source[part[0].start:part[-1].end]))
+                                      self.source[part[0].start:part[-1].end],attributes=attrs))
         return result
     def parse(self):
         design = Design(source_language=self.language, source=self.source)
@@ -107,10 +132,14 @@ class Parser:
                 if len(module.ports) != len([p for p in split(ports) if p]): raise ParseError('invalid non-ANSI port list')
             self.pop(';')
             while self.peek() and self.peek() != 'endmodule':
+                attrs=self.attributes()
+                if attrs and self.peek() not in DIRECTIONS | TYPES | {'parameter','localparam'} and self.peek() not in self.enums and self.peek() not in self.types:
+                    raise ParseError('only declaration attributes are supported')
                 if self.peek() in DIRECTIONS:
                     direction = self.peek(); decls = self.declarations(self.until(';'), 'port'); self.pop(';')
                     known = {p.name:i for i,p in enumerate(module.ports)}
                     for d in decls:
+                        d.attributes=attrs+d.attributes
                         if ansi or d.name not in known: raise ParseError('duplicate or unknown port declaration')
                         module.ports[known[d.name]] = d
                 elif self.peek() == 'typedef': self.typedef(module)
@@ -120,12 +149,14 @@ class Parser:
                 elif self.peek() in TYPES | {'parameter','localparam'} or self.peek() in self.enums or self.peek() in self.types:
                     decls = self.declarations(self.until(';')); self.pop(';')
                     for d in decls:
+                        d.attributes=attrs+d.attributes
                         existing = next((p for p in module.ports if p.name == d.name), None)
                         if existing and not ansi:
                             if d.type.bounds and existing.type.bounds and d.type.bounds != existing.type.bounds:
                                 raise ParseError('port redeclaration range mismatch')
                             if d.type.bounds: existing.type = d.type
                             existing.net = d.net; existing.value = d.value
+                        elif d.kind=='parameter':module.parameters.append(d)
                         else: module.declarations.append(d)
                 else: module.statements += self.concurrent()
             self.pop('endmodule')

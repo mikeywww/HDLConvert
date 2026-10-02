@@ -33,6 +33,19 @@ def run(directory):
                 time.sleep(.02)
             if app.busy or 'rising_edge' not in app.output.get():
                 raise RuntimeError('editor worker conversion failed')
-        print('PASS: Chinese GUI, default GB2312 output, bundled Tk/tkdnd, Unicode drop, GBK decoding, language inference and editor conversion')
+            app.clear()
+            app.source.set('entity m is port(q:out std_logic);end;architecture rtl of m is begin wait;end;')
+            app.source_language.set('VHDL');app.target_language.set('SystemVerilog');app.convert()
+            deadline=time.monotonic()+15
+            while app.busy and time.monotonic()<deadline:root.update();time.sleep(.02)
+            if app.busy or app.output_complete or '转换失败' not in app.status.get():
+                raise RuntimeError('incomplete HDL was reported as success')
+            app.save_as()
+            if '不能保存为有效 HDL' not in app.log.get('1.0','end'):
+                raise RuntimeError('incomplete HDL save was not refused')
+            app.output.set('previous result');app.output_complete=True;app.busy=True
+            app.events.put(('error','test worker exception','systemverilog'));app.poll()
+            if app.output_complete or app.output.get():raise RuntimeError('worker exception left a saveable stale result')
+        print('PASS: Chinese GUI, GB2312 output, bundled Tk/tkdnd, Unicode drop, GBK decoding, editor conversion and incomplete/stale-result save refusal')
     finally:
         root.destroy()

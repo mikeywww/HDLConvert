@@ -17,7 +17,6 @@ from hdlconvert.encoding import read_source, output_codec
 from .parser import Parser
 from .verilog import VerilogGenerator, walk, targets, root_name
 from .vhdl import VHDLGenerator
-from .initialization import analyze
 
 LANGUAGES=('vhdl','verilog','systemverilog')
 SUFFIX={'vhdl':'.vhd','verilog':'.v','systemverilog':'.sv'}
@@ -92,7 +91,7 @@ def extract_process_fragment(output):
     return '\n'.join(line[4:] if line.startswith('    ') else line for line in lines[start:end])+'\n'
 
 
-def convert_text(source, *, source_language=None, target_language='systemverilog', top=None, architecture=None, generics=None):
+def convert_text(source, *, source_language=None, target_language='systemverilog', top=None, architecture=None, generics=None, source_path=None):
     src=language(source_language) if source_language else detect_language(source)
     dst=language(target_language)
     diagnostics=[]
@@ -103,25 +102,20 @@ def convert_text(source, *, source_language=None, target_language='systemverilog
                 source,assumed=fragment
                 diagnostics.append(Diagnostic(1,'standalone process: surrounding signal widths and declarations must match the insertion scope'))
             design=VHDLParser(source).parse()
-            diagnostics+=analyze(design)
             generator=LegacyGenerator(top,architecture,{k.lower():vhdl_tokens(str(v)) for k,v in (generics or {}).items()})
+            generator.source_path=source_path
             normalized=generator.generate(design)
-            if dst=='systemverilog':
-                omitted={d.message.rsplit(' ',1)[-1] for d in generator.diagnostics if d.message.startswith('declaration initializer omitted for child output ')}
-                diagnostics=[d for d in diagnostics if not any(d.message.startswith(f'declaration initialization preserved: {name};') for name in omitted)]
+            if generator.incomplete:
                 diagnostics+=generator.diagnostics
-            # Invalid initializers are never silently replaced by truncation.
-            invalid=[d.data['invalid_initializer_source'] for u in design.units for d in u.data.get('decl',[]) if d.data.get('invalid_initializer_source')]
-            if invalid:
-                normalized='\n'.join('// TODO: Invalid declaration initializer: '+s.replace('\n','\n// ') for s in invalid)+'\n'+normalized
+                return ConversionResult(comment_draft(source,dst,str(generator.diagnostics[-1])),diagnostics,complete=False)
+            if dst=='systemverilog':
+                diagnostics+=generator.diagnostics
             if dst=='systemverilog':
                 if fragment:normalized=extract_process_fragment(normalized)
                 return ConversionResult(normalized,diagnostics)
             if dst=='vhdl':raise ParseError('same-language VHDL formatting is not a conversion direction')
             from .vhdl_adapter import VHDLAdapter
             neutral=VHDLAdapter(top,architecture,{k.lower():vhdl_tokens(str(v)) for k,v in (generics or {}).items()}).convert(design)
-            omitted={d.message.rsplit(' ',1)[-1] for d in neutral.diagnostics if d.message.startswith('declaration initializer omitted for child output ')}
-            diagnostics=[d for d in diagnostics if not any(d.message.startswith(f'declaration initialization preserved: {name};') for name in omitted)]
             diagnostics+=neutral.diagnostics
         else:
             if architecture or generics:raise ParseError('architecture/generic overrides apply only to VHDL input')
@@ -149,8 +143,8 @@ def convert_text(source, *, source_language=None, target_language='systemverilog
     except (ParseError,ValueError,ZeroDivisionError) as exc:
         message=str(exc)
         match=re.search(r'line (\d+)',message)
-        diagnostics.append(Diagnostic(int(match[1]) if match else 1,message))
-        return ConversionResult(comment_draft(source,dst,message),diagnostics)
+        diagnostics.append(Diagnostic(int(match[1]) if match else 1,message,'ERROR'))
+        return ConversionResult(comment_draft(source,dst,message),diagnostics,complete=False)
 
 
 def convert_file(input_path,output_path=None,*,source_language=None,target_language='systemverilog',strict=False,
@@ -161,11 +155,11 @@ def convert_file(input_path,output_path=None,*,source_language=None,target_langu
     out=Path(output_path).resolve() if output_path else src.with_suffix(SUFFIX[dst])
     if out==src:raise ValueError('output cannot overwrite source')
     if out.suffix.lower() not in (('.vhd','.vhdl') if dst=='vhdl' else (SUFFIX[dst],)):raise ValueError('output extension must match target language')
-    result=convert_text(source,source_language=src_lang,target_language=dst,**options)
+    result=convert_text(source,source_language=src_lang,target_language=dst,source_path=src,**options)
     if strict and result.diagnostics:raise ParseError(f'{len(result.diagnostics)} warning(s); strict mode did not write output')
     # Full unsupported drafts remain reviewable through convert_text, but CLI
     # and file API never replace an existing valid output with an empty design.
-    if 'No complete target design emitted.' in result.text:raise ParseError(result.diagnostics[-1].message)
+    if not result.complete or 'No complete target design emitted.' in result.text:raise ParseError(result.diagnostics[-1].message)
     out.parent.mkdir(parents=True,exist_ok=True);temp=None
     try:
         with tempfile.NamedTemporaryFile('w',encoding=output_codec(output_encoding),newline='\n',dir=out.parent,delete=False) as f:
