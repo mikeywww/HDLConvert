@@ -11,7 +11,42 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 
 
-def main():
+def verify_fragments(folder,run,names=None):
+    cases={
+        'case':("case sel is when 0=>q<='0';when others=>if en='1' then q<='1';else q<='0';end if;end case;",'comb',"q = 1'b1;"),
+        'if':("if en='1' then if ready='1' then q<=d;else q<='0';end if;else q<='1';end if;",'clocked','q <= d;'),
+        'assign':("a<=x'0001aa';b<='1';c<=d;",'auto',"assign a = 24'h1aa;"),
+        'counter':("cnt<=cnt+'1';",'clocked',"cnt + 1'b1"),
+        'array':("type arr_t is array(3 to 5)of std_logic_vector(7 downto 0);signal a,b:arr_t;if en='1' then a<=b;end if;",'clocked','] <= b['),
+        'numeric':("signal din:unsigned(15 downto 0);signal q:unsigned(7 downto 0);if en='1' then q<=resize(din(11 downto 4),8);else q<=(others=>'0');end if;",'clocked','din[11:4]'),
+    }
+    for name,(code,context,expected) in cases.items():
+        if names is not None and name not in names:continue
+        source=folder/(name+'.vhd');source.write_text(code,encoding='utf-8')
+        for target,ext in (('verilog','.v'),('systemverilog','.sv')):
+            output=source.with_suffix(ext);run([source,'-o',output,'--fragment-context',context])
+            text=output.read_text(encoding='gb2312')
+            if expected not in text or 'hdl_fragment_' in text or 'module ' in text:
+                raise RuntimeError('frozen snippet output failed: '+name+'/'+target+'\n'+text)
+    family=folder/'bare.v';family.write_text("case(sel)0:q<=8'h1;default:if(en)q<=d;else q<=8'h0;endcase",encoding='utf-8')
+    modern=family.with_suffix('.sv');back=folder/'bare_back.v'
+    run([family,'-o',modern]);run([modern,'-o',back])
+    if 'case (sel)' not in back.read_text() or 'module ' in back.read_text():raise RuntimeError('frozen family snippets failed')
+    startup=folder/'startup.sv';startup.write_text("logic[1:0]sel=2'b0;logic[7:0]q;always_comb begin case(sel)0:q=8'd10;default:q=8'd20;endcase end",encoding='utf-8')
+    startup_out=startup.with_suffix('.v');run([startup,'-o',startup_out])
+    if 'assign q = hdl_select_' not in startup_out.read_text():raise RuntimeError('fragment startup lowering failed')
+    family.write_text("reg q=1'b0,en,d; if(en)q<=d;else q<=1'b0;",encoding='utf-8')
+    reverse=family.with_suffix('.vhd');run([family,'-o',reverse])
+    if "signal q : std_logic := '0';" not in reverse.read_text():raise RuntimeError('typed VHDL reverse snippet failed')
+    bad=folder/'bad_fragment.vhd';bad.write_text("if en='1' then q<=d;",encoding='utf-8')
+    output=bad.with_suffix('.v');output.write_text('keep',encoding='utf-8')
+    run([bad,'-o',output],expected=1)
+    if output.read_text()!='keep':raise RuntimeError('invalid frozen snippet replaced valid output')
+    conflict=folder/'conflict.v';conflict.write_text('reg q,a,b;always @* q=a;always @* q=b;',encoding='utf-8')
+    run([conflict,'--target','vhdl'],expected=1)
+
+
+def main(fragments_only=False):
     image=(ROOT/'dist'/'HDLConvert.exe').read_bytes()
     pe=struct.unpack_from('<I',image,0x3c)[0]
     if struct.unpack_from('<H',image,pe+24+68)[0]!=2:raise RuntimeError('EXE is not a Windows GUI subsystem executable')
@@ -36,12 +71,17 @@ def main():
                 raise RuntimeError(log[-1])
             return result
 
-        if '2.0.5' not in run(['--version']).stdout:
+        if '2.0.6' not in run(['--version']).stdout:
             raise RuntimeError('version missing')
         if 'MIT License' not in run(['--licenses']).stdout:
             raise RuntimeError('notices missing')
         if 'PASS:' not in run(['--self-test', folder]).stdout:
             raise RuntimeError('GUI diagnostic failed')
+        verify_fragments(folder,run)
+        if fragments_only:
+            (ROOT/'build'/'release-fragments.log').write_text('\n'.join(log),encoding='utf-8')
+            print('PASS: isolated 2.0.6 EXE/GUI/DnD/encodings, six fragment forms, family interchange, typed VHDL reverse and failed-output preservation')
+            return
         vhdl = folder/'输入 file.vhdl'
         shutil.copy2(ROOT/'tests'/'vhdl'/'array_test.vhd', vhdl)
         run([vhdl])
@@ -122,4 +162,6 @@ signal q:std_logic:='0';begin u:child port map(q=>q);y<=q;end;''', encoding='utf
 
 
 if __name__ == '__main__':
-    main()
+    import argparse
+    p=argparse.ArgumentParser();p.add_argument('--fragments-only',action='store_true',help='verify only changed fragment/GUI paths and packaging')
+    main(p.parse_args().fragments_only)

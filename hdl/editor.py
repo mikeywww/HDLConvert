@@ -11,6 +11,7 @@ from hdlconvert.encoding import read_source, output_codec
 LABELS={'自动检测':'auto','VHDL':'vhdl','Verilog':'verilog','SystemVerilog':'systemverilog'}
 NAMES={v:k for k,v in LABELS.items()}
 ENCODINGS={'GB2312':'gb2312','GBK':'gbk','UTF-8':'utf-8'}
+CONTEXT_LABELS={'自动':'auto','时序过程内':'clocked','组合过程内':'comb','并发语句':'concurrent'}
 KEYWORDS=re.compile(r'\b(?:entity|architecture|is|begin|end|signal|variable|constant|generic|port|in|out|inout|process|if|then|elsif|else|case|when|others|for|loop|generate|type|array|of|std_logic|std_logic_vector|unsigned|signed|integer|module|endmodule|input|output|wire|reg|logic|assign|always|always_ff|always_comb|posedge|negedge|parameter|localparam|typedef|enum|endcase|endgenerate)\b',re.I)
 
 
@@ -106,6 +107,12 @@ class EditorApp:
         self.encoding_combo=ttk.Combobox(bar,textvariable=self.output_encoding,values=list(ENCODINGS),state='readonly',width=10)
         self.encoding_combo.pack(side='left')
         ttk.Label(bar,text='可拖放 .vhd / .vhdl / .v / .sv',foreground='#555555').pack(side='right')
+        fragment_bar=ttk.Frame(shell);fragment_bar.pack(fill='x',pady=(0,8))
+        ttk.Label(fragment_bar,text='代码段上下文：').pack(side='left',padx=(0,6))
+        self.fragment_context=tk.StringVar(value='自动')
+        self.context_combo=ttk.Combobox(fragment_bar,textvariable=self.fragment_context,values=list(CONTEXT_LABELS),state='readonly',width=15)
+        self.context_combo.pack(side='left')
+        ttk.Label(fragment_bar,text='可粘贴 case / if / 多条赋值；涉及位宽时请附相关声明',foreground='#555555').pack(side='left',padx=10)
         panes=ttk.Panedwindow(shell,orient='vertical');panes.pack(fill='both',expand=True)
         editors=ttk.Panedwindow(panes,orient='horizontal');panes.add(editors,weight=5)
         left=ttk.Labelframe(editors,text='源代码',padding=1);right=ttk.Labelframe(editors,text='转换结果',padding=1)
@@ -169,9 +176,11 @@ class EditorApp:
         self.busy=True;self.status.set('正在转换 '+NAMES[src]+' → '+NAMES[dst]+'…')
         for c in self.controls:c.configure(state='disabled')
         self.source_combo.configure(state='disabled');self.target_combo.configure(state='disabled')
+        self.context_combo.configure(state='disabled')
+        fragment_context=CONTEXT_LABELS[self.fragment_context.get()]
         source_path=self.path
         def work():
-            try:self.events.put(('result',convert_text(source,source_language=src,target_language=dst,source_path=source_path),dst))
+            try:self.events.put(('result',convert_text(source,source_language=src,target_language=dst,source_path=source_path,fragment_context=fragment_context),dst))
             except Exception as exc:self.events.put(('error',str(exc),dst))
         threading.Thread(target=work,daemon=True).start()
     def poll(self):
@@ -190,6 +199,7 @@ class EditorApp:
                 self.busy=False
                 for c in self.controls:c.configure(state='normal')
                 self.source_combo.configure(state='readonly');self.target_combo.configure(state='readonly')
+                self.context_combo.configure(state='readonly')
         except queue.Empty:pass
         self.root.after(80,self.poll)
     def save_as(self):

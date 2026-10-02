@@ -107,7 +107,7 @@ class ExprParser:
                 value = f'(({arg}) < 0 ? -({arg}) : ({arg}))'
             else:
                 value = f'({"~" if n == "not" else n}{arg})'
-            if meta:
+            if meta and meta[0]!='external':
                 value = self.sized(value, meta)
         elif n == '(':
             self.i -= 1
@@ -146,7 +146,9 @@ class ExprParser:
         elif t.text.isidentifier():
             symbol = self.conv.symbols.find(t.text)
             value = self.conv.symbols.resolve(t.text)
-            if symbol and symbol.type.vector:
+            if symbol and symbol.type.vhdl=='fragment_external':
+                meta=('external',None)
+            elif symbol and symbol.type.vector:
                 numeric_unsigned=symbol.type.vhdl.lower()=='unsigned' or self.conv.symbols.unsigned_arithmetic and symbol.type.vhdl.lower()=='std_logic_vector'
                 meta = ('signed' if symbol.type.signed else ('unsigned' if numeric_unsigned else 'bits'), f'$bits({value})')
             if self.peek() == '(' and not (symbol and symbol.kind != 'function'):
@@ -163,6 +165,8 @@ class ExprParser:
                     meta = (n[3:], args[1])
                 elif n in ('shift_left','shift_right') and len(args)==2:
                     kind=self.conv.numeric_kind(args_raw[0])
+                    if not kind and typed_args[0][1] and typed_args[0][1][0] in ('signed','unsigned'):
+                        kind=typed_args[0][1][0]
                     if kind not in ('signed','unsigned'):raise ParseError('shift argument requires signed/unsigned type')
                     meta=typed_args[0][1]
                     op='<<' if n=='shift_left' else '>>>' if kind=='signed' else '>>'
@@ -171,6 +175,8 @@ class ExprParser:
                     if len(args) != 2:
                         raise ParseError('resize requires two arguments')
                     kind = self.conv.numeric_kind(args_raw[0])
+                    if not kind and typed_args[0][1] and typed_args[0][1][0] in ('signed','unsigned'):
+                        kind=typed_args[0][1][0]
                     if not kind:
                         raise ParseError('resize argument sign cannot be established')
                     arg, size = args
@@ -251,6 +257,10 @@ class ExprParser:
                 value = f'({value} {OPS.get(op, op)} {right})'
             if op in ('=', '/=', '<', '>', '<=', '>='):
                 meta = None
+            elif (meta and meta[0]=='external') or (right_meta and right_meta[0]=='external'):
+                # Fragment names have no invented width; validation restricts
+                # width-sensitive expressions before this rendering step.
+                meta=('external',None)
             elif op == '&':
                 if meta and right_meta:
                     kind = meta[0] if meta[0] == right_meta[0] and meta[0] != 'scalar' else 'bits'

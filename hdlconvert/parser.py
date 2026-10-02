@@ -111,10 +111,12 @@ class Parser:
                                     'value': value[1] if len(value) == 2 else []}))
         return result
 
-    def declarations(self, stop='begin'):
+    def declarations(self, stop='begin', fragment=False):
         out = []
         while self.peek() and self.peek() != stop:
             start, tag = self.i, self.peek()
+            if fragment and tag not in ('signal','variable','constant','type','subtype','function','attribute','component'):
+                break
             if tag in ('signal', 'variable', 'constant'):
                 self.pop()
                 ts = self.until(';')

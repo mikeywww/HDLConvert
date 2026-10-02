@@ -66,6 +66,7 @@ class Module:
     functions: list = field(default_factory=list)
     source: str = ''
     line: int = 1
+    external_symbols: dict = field(default_factory=dict)
 
 
 @dataclass

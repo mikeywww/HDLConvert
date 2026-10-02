@@ -36,7 +36,7 @@ python hdlconvert.py --gui
 GUI 使用 tkinter/ttk，保持 Windows 10 原生桌面工具风格，界面文字为中文。程序启用 Windows Per-Monitor DPI 感知并使用微软雅黑 UI 字体，使高 DPI 缩放下的中文显示更清晰；默认窗口高度按屏幕高度减去 50 调整，上限为 1050，并靠屏幕顶部放置，为底部状态栏留出更多空间。工作流：
 
 1. 拖入 `.vhd`、`.vhdl`、`.v` 或 `.sv`，也可打开文件或粘贴代码。
-2. 检查自动识别的源语言，选择目标语言。
+2. 检查自动识别的源语言，选择目标语言。代码段可选择“时序过程内”“组合过程内”或“并发语句”。
 3. 点击转换或按 F5。
 4. 选择输出编码（默认 GB2312，可选 GBK、UTF-8），查看警告/日志，然后复制结果或另存为。
 
@@ -81,13 +81,55 @@ python hdlconvert.py design.vhd --target systemverilog --dependency types.vhd --
 | FSM | VHDL enum；SV enum；Verilog localparam 降级 |
 | 运算 | 加减乘除、比较、逻辑、常用移位和已知位宽转换 |
 
-单独粘贴一个完整的 VHDL `process` 块也可转换为 `always` 代码段。代码段依赖粘贴位置已有的信号声明；无从推断索引/聚合位宽时会要求提供完整 entity/architecture。子模块端口方向可由同文件 entity、component 声明或同目录同名 VHDL 文件识别；连接子模块输出的父模块信号/输出端口在 Verilog 中生成为 `wire`，在 SystemVerilog 中使用 `logic`。缺少子模块接口信息时，VHDL→Verilog 拒绝猜测端口方向。
+子模块端口方向可由同文件 entity、component 声明或同目录同名 VHDL 文件识别；连接子模块输出的父模块信号/输出端口在 Verilog 中生成为 `wire`，在 SystemVerilog 中使用 `logic`。缺少子模块接口信息时，VHDL→Verilog 拒绝猜测端口方向。
 
 VHDL `x"0001aa"` 转为保留原位宽的 `24'h1aa`，也兼容 `x'0001aa'` 写法。静态全零重复拼接 `{32{1'b0}}` 简化为 `32'b0`；参数化宽度保留重复拼接以支持 generic/parameter 覆盖。`'0'`、`'1'` 按目标上下文转换为常量；支持 unsigned 或 std_logic_unsigned 计数器的 `cnt <= cnt + '1'`。
 
 VHDL→Verilog/SV 支持固定一/二维数组、非零/降序范围及同长度不同边界的逐元素位置对应；整数组复制展开为循环。简单 package 常量、类型和函数在 Verilog 中内联；SV 保留 package。支持常见 numeric_std 转换、selected assignment、完整静态端口分片关联、generic 相关端口填充值和信号字符串属性。无约束 vector 函数可按已证明的参数及函数体返回边界生成不同位宽版本；复杂返回推导仍拒绝。简单无反馈的 `process(all)` signal 赋值链降低为连续方程；带分支、反馈或显式 sensitivity 的复杂 delta 依赖仍拒绝。
 
 Verilog/SV 路径支持 DDR3 示例生成结果中的 function、固定数组、packed struct 和局部静态变量。完整 case 译码在 Verilog 中使用连续函数调用，保留启动时求值。跨语言互转仅对受支持的 RTL 子集保留功能，不承诺任意 SV 语法、注释或格式无损。运行时二值 `bit` 存储、复杂静态函数状态等结构会明确拒绝。
+
+## 部分代码段
+
+可直接粘贴完整的 `case`、嵌套 `if/elsif/else`、循环、多条赋值，或一个/多个 `process`，无需补 entity/architecture。输出保留代码段结构，不生成临时 module、虚构时钟或外部信号声明。
+
+VHDL 代码段的上下文决定信号赋值方式：
+
+| 上下文 | 输入片段 | 输出用途 |
+|---|---|---|
+| 自动 | 单独 case/if/loop 或含 `:=` | 时序过程内，signal 使用 `<=` |
+| 自动 | 多条普通 `<=` 赋值 | 并发 `assign` |
+| 时序过程内 | 过程中的语句 | 粘贴到已有 always 时序块内 |
+| 组合过程内 | 组合过程中的语句 | signal 使用 `=`，粘贴到已有组合块内 |
+| 并发语句 | 并发赋值或完整 process | 粘贴到 module 内；process 保留真实时钟/复位 |
+
+变量 `:=` 始终生成 `=`。自动模式无法从裸赋值判断它是否来自过程，需按原代码位置选择上下文。Verilog↔SV 代码段保留原始阻塞/非阻塞操作符；上下文不会改写其调度语义。
+
+例如，粘贴并选择“组合过程内”：
+
+```vhdl
+case sel is
+    when "00" => q <= '0';
+    when others =>
+        if en = '1' then q <= '1'; else q <= '0'; end if;
+end case;
+```
+
+结果是可放入组合块的 `case (sel) ... endcase`，其中使用 `q = 1'b0` 和 `q = 1'b1`。`cnt <= cnt + '1';` 在“时序过程内”生成 `cnt <= (cnt + 1'b1);`，依赖外部 cnt 原有位宽，不会把它猜成一位信号。
+
+涉及索引、数组、resize、signed/unsigned 或复杂算术时，可在代码段前附上相关 signal/variable/constant/type 声明。例如 `signal d : unsigned(15 downto 0);`。输出的声明和辅助函数须放在目标声明作用域，后面的控制/赋值语句放在选定过程内；不要把声明前缀重复加入已有工程。VHDL 声明初值仍按下节策略省略。
+
+Verilog/SV 的 case/if/assign/always 片段可互转；转 VHDL 时需附上所用信号声明。裸阻塞赋值不能可靠映射为 VHDL 信号赋值，应提供完整 always 块以保留变量执行顺序。依赖生成辅助函数、复杂数组或缺失类型上下文的反向片段要求提供完整 module。VHDL 目标片段需放入已有 `std_logic_1164` / `numeric_std` 环境。
+
+完整组合过程在 Verilog 中还涉及启动时求值：已声明类型的完整 case 译码通过连续函数调用保留该行为。其余 `always_comb` 或 VHDL 组合 process 片段转 Verilog 时保守拒绝，可保留 SV，或只转换裸语句并按原工程语义放入已有过程。
+
+```powershell
+python hdlconvert.py fragment.vhd -o fragment.v --fragment-context clocked
+python hdlconvert.py fragment.vhd -o fragment.sv --fragment-context comb
+python hdlconvert.py fragment.v -o fragment.sv
+```
+
+粘贴的 `q <= d;` 在多种语言中都合法，无法自动确定源语言时手动选择即可。文件输入可按扩展名判断。代码段均在日志中提示所用上下文；不完整语句或无法证明的类型转换会拒绝，`--strict` 也会阻止带上下文提示的代码段输出。
 
 ## 声明初值
 

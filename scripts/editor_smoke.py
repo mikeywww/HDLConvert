@@ -27,6 +27,20 @@ def main():
         assert app.source.text.tag_ranges('keyword')
         app.source.select_all();assert app.source.text.tag_ranges('sel')
         app.clear();assert not app.source.get() and not app.output.get()
+        assert app.fragment_context.get()=='自动'
+        app.source_language.set('自动检测');app.target_language.set('Verilog')
+        app.source.set("case sel is when 0 => if en='1' then q<='1'; else q<='0'; end if; when others => q<='0';end case;")
+        app.fragment_context.set('组合过程内');app.convert();deadline=time.monotonic()+15
+        while app.busy and time.monotonic()<deadline:root.update();time.sleep(.02)
+        assert not app.busy and app.output_complete,app.output.get()
+        assert 'case (sel)' in app.output.get() and "q = 1'b1" in app.output.get()
+        assert 'module ' not in app.output.get() and 'always' not in app.output.get()
+        assert str(app.context_combo.cget('state'))=='readonly',app.context_combo.cget('state')
+        app.source.set('a<=b;c<=d;');app.source_language.set('VHDL');app.fragment_context.set('时序过程内')
+        app.convert();deadline=time.monotonic()+15
+        while app.busy and time.monotonic()<deadline:root.update();time.sleep(.02)
+        assert app.output.get().strip()=='a <= b;\nc <= d;',app.output.get()
+        app.clear();app.fragment_context.set('自动')
         app.source.set('entity m is port(q:out std_logic);end;architecture rtl of m is begin wait;end;')
         app.source_language.set('VHDL');app.target_language.set('SystemVerilog')
         app.convert();deadline=time.monotonic()+15
@@ -37,6 +51,6 @@ def main():
         app.output.set('previous result');app.busy=True
         app.events.put(('error','worker exception','systemverilog'));app.poll()
         assert not app.output_complete and not app.output.get()
-        print('PASS: Chinese editor/default encoding, TkDND Unicode drop, worker conversion, highlight, selection, clear, and incomplete HDL save refusal')
+        print('PASS: Chinese editor/default encoding, TkDND Unicode drop, fragment context/worker conversion, highlight, selection, clear, and incomplete HDL save refusal')
     finally:root.destroy()
 if __name__=='__main__':main()

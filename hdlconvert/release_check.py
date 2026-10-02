@@ -34,6 +34,14 @@ def run(directory):
             if app.busy or 'rising_edge' not in app.output.get():
                 raise RuntimeError('editor worker conversion failed')
             app.clear()
+            app.source.set("case sel is when 0=>if en='1' then q<='1';else q<='0';end if;when others=>q<='0';end case;")
+            app.source_language.set('自动检测');app.target_language.set('Verilog');app.fragment_context.set('组合过程内');app.convert()
+            deadline=time.monotonic()+15
+            while app.busy and time.monotonic()<deadline:root.update();time.sleep(.02)
+            if app.busy or not app.output_complete or 'case (sel)' not in app.output.get() or "q = 1'b1;" not in app.output.get():
+                raise RuntimeError('GUI fragment context/case conversion failed')
+            if 'module ' in app.output.get() or 'always' in app.output.get():raise RuntimeError('fragment leaked a generated wrapper')
+            app.clear();app.fragment_context.set('自动')
             app.source.set('entity m is port(q:out std_logic);end;architecture rtl of m is begin wait;end;')
             app.source_language.set('VHDL');app.target_language.set('SystemVerilog');app.convert()
             deadline=time.monotonic()+15
@@ -46,6 +54,6 @@ def run(directory):
             app.output.set('previous result');app.output_complete=True;app.busy=True
             app.events.put(('error','test worker exception','systemverilog'));app.poll()
             if app.output_complete or app.output.get():raise RuntimeError('worker exception left a saveable stale result')
-        print('PASS: Chinese GUI, GB2312 output, bundled Tk/tkdnd, Unicode drop, GBK decoding, editor conversion and incomplete/stale-result save refusal')
+        print('PASS: Chinese GUI, GB2312 output, bundled Tk/tkdnd, Unicode drop, GBK decoding, fragment context/editor conversion and incomplete/stale-result save refusal')
     finally:
         root.destroy()

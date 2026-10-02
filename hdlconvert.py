@@ -39,7 +39,7 @@ def main(argv=None):
         attach_cli_streams()
     argv = raw_args
     parser = argparse.ArgumentParser(description='HDLConvert: VHDL / Verilog / SystemVerilog')
-    parser.add_argument('--version', action='version', version='HDLConvert 2.0.5')
+    parser.add_argument('--version', action='version', version='HDLConvert 2.0.6')
     parser.add_argument('--licenses', action='store_true', help='show bundled third-party notices')
     parser.add_argument('--self-test', type=Path, metavar='DIRECTORY', help='test bundled GUI/DnD and conversion in a temporary subdirectory')
     parser.add_argument('inputs', nargs='*', type=Path)
@@ -48,6 +48,8 @@ def main(argv=None):
     parser.add_argument('--gui', action='store_true')
     parser.add_argument('--source', choices=('auto','vhdl','verilog','systemverilog','sv'), default='auto')
     parser.add_argument('--target', choices=('vhdl','verilog','systemverilog','sv'))
+    parser.add_argument('--fragment-context', choices=('auto','clocked','comb','concurrent'), default='auto',
+                        help='scope for bare RTL snippets: clocked/comb process body or concurrent (default: auto)')
     parser.add_argument('--output-encoding', choices=('gb2312','gbk','utf-8'), default='gb2312',
                         help='output file encoding (default: gb2312)')
     parser.add_argument('--top')
@@ -95,9 +97,10 @@ def main(argv=None):
             if args.dependency and not legacy:
                 raise ValueError('--dependency currently supports only VHDL to SystemVerilog')
             if legacy:
+                if args.fragment_context!='auto':raise ValueError('--fragment-context cannot be combined with --dependency')
                 result = convert_file(source, output, top=args.top, architecture=args.architecture, generics=generics, dependencies=args.dependency, strict=args.strict, output_encoding=args.output_encoding)
             else:
-                result = convert_hdl(source, output, source_language=None if args.source=='auto' else args.source, target_language=target, top=args.top, architecture=args.architecture, generics=generics, strict=args.strict, output_encoding=args.output_encoding)
+                result = convert_hdl(source, output, source_language=None if args.source=='auto' else args.source, target_language=target, top=args.top, architecture=args.architecture, generics=generics, strict=args.strict, output_encoding=args.output_encoding, fragment_context=args.fragment_context)
             for diagnostic in result.diagnostics:
                 logging.warning('%s: line %s: %s', source.name, diagnostic.line, diagnostic.message)
             warned += bool(result.diagnostics)

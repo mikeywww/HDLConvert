@@ -81,6 +81,7 @@ def sv_expr(e, target='systemverilog', width=None, cast=None):
 
 
 def width_of(t):
+    if t.kind=='external':return None
     if t.kind=='integer': return '32'
     if t.bounds:
         l,r=t.bounds
@@ -110,7 +111,9 @@ class VerilogGenerator:
             if len(e.args)!=1:raise ParseError('$bits requires one expression')
             typ=self.expr_type(e.args[0])
             if typ==Type():raise ParseError('$bits lowering requires expression type metadata')
-            return width_of(typ)
+            width=width_of(typ)
+            if width is None:raise ParseError('$bits requires declaration context in a fragment')
+            return width
         width='32' if e.args[0]==Expr('name','int') else self.expr(e.args[0])
         try:
             n=literal_int(e.args[0])
@@ -164,6 +167,7 @@ class VerilogGenerator:
             self.cast_helpers={}
             self.block_serial=0
             self.symbols={d.name:d.type for d in m.ports+m.declarations+m.parameters}
+            self.symbols.update(m.external_symbols)
             if self.target=='verilog':
                 m.statements=self.lower_comb_cases(m.statements,m.functions)
                 self.function_names={fn['name'] for fn in m.functions}
@@ -264,6 +268,7 @@ class VerilogGenerator:
         if e.kind=='name':return self.symbols.get(e.value,Type())
         if e.kind=='index':
             typ=self.expr_type(e.args[0])
+            if typ.kind=='external':return typ
             if typ.dimensions:
                 result=Type(typ.kind,typ.signed,typ.bounds,list(typ.dimensions[1:]),typ.enum,typ.element,dict(typ.fields))
                 return result
