@@ -3,7 +3,7 @@ import re
 from hdlconvert.lexer import Token, ParseError
 from .ir import Expr
 
-PATTERN = re.compile(r'''(?P<space>\s+)|(?P<comment>//[^\n]*|/\*[\s\S]*?\*/)|(?P<number>(?:\d[\d_]*)?'[sS]?[bBoOdDhH][0-9a-fA-F_xXzZ?]+|'[01xXzZ]|\d[\d_]*)|(?P<id>\\[^\s]+|[$a-zA-Z_][$\w]*)|(?P<string>"(?:\\.|[^"\\])*")|(?P<op>===|!==|>>>|<<<|<<|>>|<=|>=|==|!=|&&|\|\||\*\*|~\^|\^~|~&|~\||\+\+|--|\+=|-=|::|[(){}\[\],;:.?@#=+*/%<>|&^~!\-'])''')
+PATTERN = re.compile(r'''(?P<space>\s+)|(?P<comment>//[^\n]*|/\*[\s\S]*?\*/)|(?P<number>(?:\d[\d_]*)?'[sS]?[bBoOdDhH][0-9a-fA-F_xXzZ?]+|'[01xXzZ]|\d[\d_]*)|(?P<id>\\[^\s]+|[$a-zA-Z_][$\w]*)|(?P<string>"(?:\\.|[^"\\])*")|(?P<op>===|!==|>>>|<<<|<<|>>|<=|>=|==|!=|&&|\|\||\*\*|~\^|\^~|~&|~\||\+\+|--|\+=|-=|\+:|-\:|::|[(){}\[\],;:.?@#=+*/%<>|&^~!\-'])''')
 
 
 def tokenize(source):
@@ -75,8 +75,9 @@ class ExpressionParser:
                 left = Expr('cast', '', [left, value])
             elif op == '[':
                 self.pop(); lo = self.parse()
-                if self.peek() == ':':
-                    self.pop(); hi = self.parse(); left = Expr('slice', '', [left, lo, hi])
+                if self.peek() in (':', '+:', '-:'):
+                    sep = self.pop(); hi = self.parse()
+                    left = Expr('slice', '', [left, lo, hi]) if sep == ':' else Expr('part_select', sep, [left, lo, hi])
                 else: left = Expr('index', '', [left, lo])
                 self.pop(']')
             elif op == '(' and left.kind == 'name':
@@ -92,7 +93,8 @@ class ExpressionParser:
                 left = Expr('conditional', '', [left, yes, no])
             elif op in PRECEDENCE and PRECEDENCE[op] >= minimum:
                 self.pop(); level = PRECEDENCE[op]
-                left = Expr('binary', op, [left, self.parse(level + (op != '**'))])
+                # Verilog-family binary operators, including **, associate left.
+                left = Expr('binary', op, [left, self.parse(level + 1)])
             else: break
         return left
 

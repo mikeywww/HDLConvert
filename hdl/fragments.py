@@ -172,6 +172,7 @@ def vhdl_fragment(source,target,context):
     check=deepcopy(arch);check.children=owner_nodes;validate_drivers(check,{})
     g=FragmentGenerator();g.symbols=Symbols()
     g.symbols.unsigned_arithmetic=arch.data.get('unsigned_arithmetic',False)
+    g.symbols.signed_arithmetic=arch.data.get('signed_arithmetic',False)
     declarations=g.declarations(arch.data['decl'])
     if mode=='comb':g.process(Node('process',data={'sensitivity':vtokens('all'),'decl':[]},children=nodes))
     if g.incomplete:raise ParseError(str(g.diagnostics[-1]))
@@ -180,6 +181,7 @@ def vhdl_fragment(source,target,context):
     elif target=='verilog':
         adapter=FragmentAdapter();adapter.g=FragmentGenerator();adapter.g.symbols=Symbols()
         adapter.g.symbols.unsigned_arithmetic=arch.data.get('unsigned_arithmetic',False)
+        adapter.g.symbols.signed_arithmetic=arch.data.get('signed_arithmetic',False)
         adapter.interfaces={d.name.lower():[(p.name.lower(),p.data.get('direction','in')) for p in d.children if p.kind=='port'] for d in arch.data['decl'] if d.kind=='component'}
         m=Module('hdl_fragment_temp')
         for n in arch.data['decl']:
@@ -292,7 +294,7 @@ def family_to_vhdl(module,nodes,mode):
         lines+=[prefix+' '+g.name(d.name)+' : '+g.typ(d.type)+value+';']
     lines+=g.statements(nodes,'concurrent' if mode=='concurrent' else 'process')
     output='\n'.join(lines)+'\n'
-    if re.search(r'\bhdl_(?:bit|lsb|resize|mux|repeat)\s*\(',output):
+    if re.search(r'\bhdl_(?:bit|lsb|resize|mux|repeat|clog2|max|extract)\s*\(',output):
         raise ParseError('fragment needs generated VHDL helpers; include a complete module')
     return output
 

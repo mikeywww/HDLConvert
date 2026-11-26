@@ -283,7 +283,7 @@ def verify_fragments(folder,run,names=None):
     if 'case (sel)' not in back.read_text() or 'module ' in back.read_text():raise RuntimeError('frozen family snippets failed')
     startup=folder/'startup.sv';startup.write_text("logic[1:0]sel=2'b0;logic[7:0]q;always_comb begin case(sel)0:q=8'd10;default:q=8'd20;endcase end",encoding='utf-8')
     startup_out=startup.with_suffix('.v');run([startup,'-o',startup_out])
-    if 'assign q = hdl_select_' not in startup_out.read_text():raise RuntimeError('fragment startup lowering failed')
+    if 'assign q = q_decode(' not in startup_out.read_text() and 'assign q = hdl_select_' not in startup_out.read_text():raise RuntimeError('fragment startup lowering failed')
     family.write_text("reg q=1'b0,en,d; if(en)q<=d;else q<=1'b0;",encoding='utf-8')
     reverse=family.with_suffix('.vhd');run([family,'-o',reverse])
     if "signal q : std_logic := '0';" not in reverse.read_text():raise RuntimeError('typed VHDL reverse snippet failed')
@@ -340,11 +340,11 @@ def verify_engineering(folder,run):
     if 'localparam integer W = 8' not in (project/'searched.v').read_text(encoding='gb2312'):
         raise RuntimeError('frozen transitive search directory context failed')
 
-    invalid=project/'invalid.v';invalid.write_text('module m(input[7:0]d,output q);\nlocalparam N=$clog2(4);\nassign q=d[0];endmodule',encoding='utf-8')
+    invalid=project/'invalid.v';invalid.write_text('module m(input[7:0]d,output q);\nlocalparam N=$unknown_sysfn(4);\nassign q=d[0];endmodule',encoding='utf-8')
     report=project/'invalid.json'
     run([invalid,'--target','vhdl','--report',report],expected=1)
     payload=json.loads(report.read_text(encoding='utf-8'))
-    if not any(item['line']==2 and '$clog2' in item['message'] for item in payload['files'][0]['diagnostics']):
+    if not any(item['line']==2 and '$unknown_sysfn' in item['message'] for item in payload['files'][0]['diagnostics']):
         raise RuntimeError('frozen VHDL error line context lost')
 
     # Host simulators run separately; the frozen app still sees only Windows PATH.

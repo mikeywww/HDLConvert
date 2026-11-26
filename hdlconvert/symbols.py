@@ -20,6 +20,7 @@ class TypeInfo:
     element: object = None
     vhdl: str = ''
     inline_array: bool = False
+    vec_range: object = field(default=None, compare=False)
 
 
 @dataclass
@@ -33,12 +34,15 @@ class Symbols:
     def __init__(self, parent=None):
         self.parent = parent
         self.unsigned_arithmetic=parent.unsigned_arithmetic if parent else False
+        self.signed_arithmetic=parent.signed_arithmetic if parent else False
         self.names = {}
         self.types = {}
         self.constants=parent.constants.copy() if parent else {}
         self.range_checks=[]
 
     def check_range(self,r,expr):
+        if r.direction not in ('to','downto'):
+            raise ParseError('unsupported type range attribute')
         from hdl.initialization import constant_value
         try:
             left,right=constant_value(r.left,self.constants),constant_value(r.right,self.constants)
@@ -80,7 +84,7 @@ class Symbols:
             self.check_range(r,expr)
             sv = 'logic' + (' signed' if n == 'signed' else '')
             sv += f' [{expr(r.left)}:{expr(r.right)}]'
-            return TypeInfo(sv, signed=n == 'signed', vector=True, vhdl=n)
+            return TypeInfo(sv, signed=n == 'signed', vector=True, vhdl=n, vec_range=r)
         typ = self.find_type(ref.name)
         if typ and typ.inline_array:
             if len(ref.ranges) != len(typ.ranges):
@@ -90,3 +94,42 @@ class Symbols:
         if typ and not ref.ranges:
             return typ
         raise ParseError(f'unknown or unsupported constrained type {ref.name}')
+
+
+def resolve_attr_range(rng, symbols):
+    """Resolve VHDL sig'range / sig'reverse_range to an explicit Range."""
+    from .ast import Range
+    if rng.direction not in ('attr_range', 'attr_reverse_range'):
+        return rng
+    if len(rng.left) != 1:
+        raise ParseError('range attribute requires a declared signal, vector or array name')
+    sym = symbols.find(rng.left[0].text)
+    if not sym:
+        raise ParseError(f'undeclared range attribute target {rng.left[0].text}')
+    base = sym.type.ranges[0] if sym.type.ranges else sym.type.vec_range
+    if base is None:
+        raise ParseError(f'{rng.left[0].text} has no vector or array range')
+    if rng.direction == 'attr_reverse_range':
+        return Range(base.right, 'to' if base.direction == 'downto' else 'downto', base.left)
+    return base
+
+
+def expand_case_choice(tokens, symbols):
+    """Expand static integer case range choices (e.g. 0 to 3) into discrete items."""
+    from .lexer import split, tokenize
+    from hdl.initialization import constant_value
+    for direction in ('to', 'downto'):
+        parts = split(tokens, direction)
+        if len(parts) == 2 and all(parts):
+            try:
+                a = constant_value(parts[0], symbols.constants)
+                b = constant_value(parts[1], symbols.constants)
+            except (ValueError, ZeroDivisionError) as exc:
+                raise ParseError('case range bounds must be static integer constants') from exc
+            if (a > b if direction == 'to' else a < b):
+                raise ParseError('null range in case choice unsupported')
+            if abs(b - a) >= 256:
+                raise ParseError('case range exceeds 256 discrete values')
+            step = 1 if direction == 'to' else -1
+            return [tokenize(str(v)) for v in range(a, b + step, step)]
+    return [tokens]

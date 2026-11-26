@@ -10,6 +10,9 @@
     {"id": "ddr3-derived-sv", "path": "../vhdl/ddr3_controller_500.vhd", "derive_source": "systemverilog", "sample_kind": "derived"},
     {"id": "reductions-v", "path": "reductions.v", "sample_kind": "synthetic"},
     {"id": "reductions-sv", "path": "reductions.v", "source": "systemverilog", "sample_kind": "synthetic"},
-    {"id": "concat-target-sv", "path": "concat_target.sv", "sample_kind": "synthetic"}
+    {"id": "concat-target-sv", "path": "concat_target.sv", "sample_kind": "synthetic"},
+    {"id": "sync-fifo-sv", "path": "sync_fifo.sv", "sample_kind": "synthetic"},
+    {"id": "reg-bank-v", "path": "reg_bank.v", "sample_kind": "synthetic"},
+    {"id": "legacy-alu-vhdl", "path": "legacy_alu.vhd", "sample_kind": "synthetic"}
   ]
 }

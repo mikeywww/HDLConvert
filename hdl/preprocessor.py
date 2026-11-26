@@ -56,6 +56,17 @@ def process_timescales(source):
         if source[pos] == '`':
             match = re.match(r'`([a-zA-Z_][$\w]*)', source[pos:])
             name = match.group(1) if match else ''
+            if name == 'default_nettype':
+                start, directive_line = pos, line
+                i = trivia(pos+len(match.group()))
+                net = re.match(r'([a-zA-Z_][$\w]*)', source[i:])
+                if not net or net.group(1) not in ('none', 'wire'):
+                    raise ParseError(f'line {directive_line}: default_nettype supports only none or wire')
+                end = i + len(net.group(1))
+                masked[start:end] = mask(source[start:end])
+                line += source[start:end].count('\n')
+                pos = end
+                continue
             if name != 'timescale':
                 raise ParseError(f'line {line}: unsupported preprocessing directive/macro `{name}')
             start, directive_line = pos, line

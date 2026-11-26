@@ -8,7 +8,7 @@ VHDL ↔ Verilog ↔ SystemVerilog
 
 工具采用 tokenizer、结构化 parser、统一 RTL IR 和目标 generator，不是基于大量文本替换，也不是完整 HDL 编译器。转换正确性和明确拒绝优先于极端语法覆盖率。
 
-当前本地开发候选版为 `dist/HDLConvert-2.1.0.exe`，包含工程输入、统一保存及四值转换扩展，尚未发布到 GitHub。构建与验收信息见 [RELEASE.md](RELEASE.md)。
+当前发布版为 `v2.2.0`（`HDLConvert-2.2.0-win-x64.zip` / `HDLConvert-2.2.0.exe`），包含老项目平台迁移 M1–M3 能力（参数化 SV/V→VHDL、高频 V/SV 与老 VHDL 语法、43 个 Vivado 2025.2 已核对原语）、工程输入、统一保存、四值转换扩展及 DDR3 位宽转换/选择分支可读性修复。构建与验收信息见 [RELEASE.md](RELEASE.md)。
 
 ## Windows 单文件版
 

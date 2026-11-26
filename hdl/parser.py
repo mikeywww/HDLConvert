@@ -108,11 +108,24 @@ class Parser:
             while p.peek() == '[': typ.dimensions.append(self.range(p.group('[',']')))
             value = None
             if p.accept('='): value = expression(part[p.i:]); p.i = len(part)
-            if current_kind in ('parameter','localparam') and not typed and inherited and not typ.bounds and value is not None:
+            if current_kind in ('parameter','localparam') and not typed and not typ.bounds and value is not None:
+                def is_int_expr(e):
+                    if e.kind=='literal': return e.value.replace('_','').isdigit()
+                    if e.kind=='call': return e.value in ('$clog2','$bits')
+                    if e.kind=='unary': return e.value in ('+','-') and is_int_expr(e.args[0])
+                    if e.kind=='binary': return e.value in ('+','-','*','/','%','**') and all(is_int_expr(a) for a in e.args)
+                    if e.kind=='name':
+                        mod=getattr(self,'module',None)
+                        pool=(mod.parameters+mod.declarations if mod else [])+result
+                        found=next((d for d in pool if d.name==e.value),None)
+                        return bool(found and found.type.kind=='integer')
+                    return False
                 sized=re.fullmatch(r"(\d+)'([sS]?)[bBoOdDhH].+",value.value) if value.kind=='literal' else None
                 if sized:
-                    size=int(sized[1]);typ=Type(signed=bool(sized[2]),bounds=(Expr('literal',str(size-1)),Expr('literal','0')))
-                elif value.kind=='literal' and value.value.isdigit():typ=Type('integer',True)
+                    size=int(sized[1])
+                    if size>1: typ=Type(signed=bool(sized[2]),bounds=(Expr('literal',str(size-1)),Expr('literal','0')))
+                    else: typ=Type(signed=bool(sized[2]))
+                elif is_int_expr(value): typ=Type('integer',True)
             if two_state:
                 try:literal_int(value)
                 except (ValueError,AttributeError):raise ParseError('bit parameter requires a known constant value')
@@ -309,10 +322,10 @@ class Parser:
         if self.peek()=='begin': return self.block()
         if self.peek() in CASE_QUALIFIERS:
             qualifier=self.pop().text
-            if self.peek()!='case':
+            if self.peek() not in ('case','casez','casex'):
                 raise ParseError(f'line {self.ts[start].line}: {qualifier} is supported only on case statements')
             node=self.control();node.data['qualifier']=qualifier
-        elif self.peek() in ('if','case','for'): node=self.control()
+        elif self.peek() in ('if','case','casez','casex','for'): node=self.control()
         elif self.accept(';'): return []
         elif self.accept('return'):
             node=Statement('return',dict(value=expression(self.until(';'))));self.pop(';')
@@ -330,7 +343,7 @@ class Parser:
         if kind=='if':
             cond=expression(self.group()); yes=body(); no=body() if self.accept('else') else []
             node=Statement('if',dict(condition=cond,otherwise=no,generate=concurrent),yes)
-        elif kind=='case':
+        elif kind in ('case','casez','casex'):
             selector=expression(self.group()); choices=[]
             while self.peek() and self.peek()!='endcase':
                 if self.accept('default'): values=[]; self.accept(':')
@@ -339,7 +352,7 @@ class Parser:
             self.pop('endcase')
             if sum(not values for values,_ in choices)>1:
                 raise ParseError(f'line {self.ts[start].line}: duplicate case default')
-            node=Statement('case',dict(expression=selector,choices=choices))
+            node=Statement('case',dict(expression=selector,choices=choices,case_kind=kind))
         else:
             parts=split(self.group(),';')
             if len(parts)!=3: raise ParseError('for requires init; condition; update')
@@ -357,10 +370,15 @@ class Parser:
             node=Statement('for',dict(name=name,start=assignment.data['value'],condition=condition,update=update,declared=declared,generate=concurrent),body())
         return self.mark(node,start)
     def assignment(self,ts,concurrent=False):
-        for op in ('=','<='):
+        for op in ('=','<=','+=','-='):
             parts=split(ts,op)
             if len(parts)==2:
                 target=expression(parts[0])
-                if target.kind not in ('name','index','slice','field','concat'): raise ParseError('invalid assignment target')
-                return Statement('assignment',dict(target=target,value=expression(parts[1]),op=op,concurrent=concurrent))
+                if target.kind not in ('name','index','slice','part_select','field','concat'): raise ParseError('invalid assignment target')
+                rhs=expression(parts[1])
+                if op in ('+=','-='):
+                    if concurrent or target.kind=='concat': raise ParseError(f'unsupported compound assignment {op}')
+                    rhs=Expr('binary',op[0],[deepcopy(target),rhs])
+                    op='='
+                return Statement('assignment',dict(target=target,value=rhs,op=op,concurrent=concurrent))
         raise ParseError('unsupported statement: '+' '.join(t.text for t in ts))

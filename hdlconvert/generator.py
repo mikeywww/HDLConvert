@@ -4,7 +4,7 @@ import re
 from .ast import Diagnostic, Node
 from .expressions import Expressions
 from .lexer import ParseError, split, words
-from .symbols import Symbols, TypeInfo, identifier
+from .symbols import Symbols, TypeInfo, identifier, resolve_attr_range, expand_case_choice
 from .drivers import combinational_targets, redundant_variable_initializers
 from .comments import decorate, closing, interface, lines as comment_lines
 
@@ -93,11 +93,11 @@ class Generator:
             prefix = 'static '
         if n.kind == 'port':
             direction = d['direction'] or 'in'
-            if direction not in ('in', 'out', 'inout'):
+            if direction not in ('in', 'out', 'inout', 'buffer'):
                 raise ParseError(f'unsupported port mode {direction}')
-            prefix = {'in': 'input ', 'out': 'output ', 'inout': 'inout '}[direction]
+            prefix = {'in': 'input ', 'out': 'output ', 'inout': 'inout ', 'buffer': 'output '}[direction]
         if n.kind in ('signal','port') and d.get('child_output_net'):
-            if n.kind == 'port' and d.get('direction') != 'out':
+            if n.kind == 'port' and d.get('direction') not in ('out', 'buffer'):
                 raise ParseError('child output cannot drive an input/inout parent port')
             if not typ.sv.startswith(('logic', 'bit')):
                 raise ParseError('child output requires a net-compatible signal type')
@@ -292,7 +292,11 @@ class Generator:
             for index, (choices, body) in enumerate(d['choices']):
                 labels = []
                 for choice in choices:
-                    labels.append('default' if words(choice).lower() == 'others' else self.expr(choice))
+                    if words(choice).lower() == 'others':
+                        labels.append('default')
+                    else:
+                        for item in expand_case_choice(choice, self.symbols):
+                            labels.append(self.expr(item))
                 if 'default' in labels and len(labels) != 1:
                     raise ParseError('others cannot share a case alternative')
                 lines += self.indent(decorate([', '.join(labels) + ': begin'], n, 'choice_' + str(index)) + self.indent(self.statements(body, ctx)) + ['end'])
@@ -305,13 +309,14 @@ class Generator:
             if gen and not n.name:
                 raise ParseError('generate requires label')
             if 'variable' in d:
+                rng = resolve_attr_range(d['range'], self.symbols)
                 parent = self.symbols
                 self.symbols = Symbols(parent)
                 self.symbols.add(d['variable'], 'loop', TypeInfo('int'))
                 self.loop_names.add(d['variable'].lower())
                 try:
                     body = self.statements(n.children, 'concurrent' if gen else context)
-                    lines = self.loop(d['variable'], d['range'], body, gen, n.name)
+                    lines = self.loop(d['variable'], rng, body, gen, n.name)
                 finally:
                     self.loop_names.discard(d['variable'].lower())
                     self.symbols = parent
@@ -569,6 +574,7 @@ class Generator:
             from .validation import validate_drivers
             validate_drivers(a,entities)
             self.symbols.unsigned_arithmetic=a.data.get('unsigned_arithmetic',False)
+            self.symbols.signed_arithmetic=a.data.get('signed_arithmetic',False)
             imports = self.imports(e.data['imports'] + a.data['imports'])
             child_outputs = self.child_output_targets(a, entities)
             conflict = child_outputs & self.assigned_signal_targets(a.children)

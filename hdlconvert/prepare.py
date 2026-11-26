@@ -75,6 +75,11 @@ def prepare(design,source_path=None,dependency_interfaces=None):
         if '__hdl_unsigned_arithmetic' in imports:
             unit.data['unsigned_arithmetic']=True
             imports.remove('__hdl_unsigned_arithmetic')
+        if '__hdl_signed_arithmetic' in imports:
+            unit.data['signed_arithmetic']=True
+            imports.remove('__hdl_signed_arithmetic')
+        if unit.data.get('unsigned_arithmetic') and unit.data.get('signed_arithmetic'):
+            raise ParseError('conflicting std_logic_unsigned and std_logic_signed imports')
     for arch in (n for n in design.units if n.kind=='architecture'):
         arch.data['interface_ranges']=[]
         decl=arch.data['decl'];interfaces={n.name.lower():n for n in decl if n.kind=='component'}
@@ -101,6 +106,9 @@ def prepare(design,source_path=None,dependency_interfaces=None):
         entity=entities.get(arch.data['entity'].lower())
         if entity:
             arch.data['unsigned_arithmetic']=arch.data.get('unsigned_arithmetic',False) or entity.data.get('unsigned_arithmetic',False)
+            arch.data['signed_arithmetic']=arch.data.get('signed_arithmetic',False) or entity.data.get('signed_arithmetic',False)
+            if arch.data['unsigned_arithmetic'] and arch.data['signed_arithmetic']:
+                raise ParseError('conflicting std_logic_unsigned and std_logic_signed imports')
             constrain_functions(arch,entity)
     design.units[:]=[n for n in design.units if n.kind!='vendor_import']
     return design

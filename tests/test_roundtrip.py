@@ -19,7 +19,7 @@ class RoundtripTests(unittest.TestCase):
         self.assertEqual(sv_expr(expr("{32{1'b0}}")),"32'b0")
         self.assertEqual(sv_expr(expr("{3{4'h0,2'b0}}")),"18'b0")
         self.assertEqual(sv_expr(expr("{N{1'b0}}")),"{N{1'b0}}")
-        self.assertEqual(sv_expr(expr("{3{1'b1}}")),"{3{1'b1}}")
+        self.assertEqual(sv_expr(expr("{3{1'b1}}")),"3'h7")
 
     def test_affine_slice_width(self):
         expr=lambda s:expression(tokenize(s))

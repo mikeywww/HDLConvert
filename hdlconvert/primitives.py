@@ -5,7 +5,7 @@ matching Verilog models, with AMD UG953/UG974 instantiation templates. This is
 converter metadata, not a copy of AMD simulation implementations. No installed
 Vivado files or models are needed at runtime. Unlisted cells are not guessed.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import re
 from .ast import Node, Range, TypeRef
@@ -49,6 +49,13 @@ def cell(name, ports, generics=()):
 
 def param(name, kind, default, width=None):
     return name, kind, width, default
+
+
+def _with_port_defaults(spec, defaults):
+    return replace(spec, ports=tuple(
+        (name, direction, width, defaults.get(name, default))
+        for name, direction, width, default in spec.ports
+    ))
 
 
 _IOSTANDARD = param('IOSTANDARD', 'string', '"DEFAULT"')
@@ -113,6 +120,106 @@ _CELLS = [
         param('INIT','bit_vector','X"0000"',16), param('IS_CLK_INVERTED','bit',"'0'",1))),
     cell('SRLC32E', 'Q:o Q31:o A:i5 CE:i CLK:i D:i', (
         param('INIT','bit_vector','X"00000000"',32), param('IS_CLK_INVERTED','bit',"'0'",1))),
+    _with_port_defaults(
+        cell('IDDR', 'Q1:o Q2:o C:i CE:i D:i R:i S:i', (
+            param('DDR_CLK_EDGE', 'string', '"OPPOSITE_EDGE"'),
+            param('INIT_Q1', 'bit', "'0'", 1),
+            param('INIT_Q2', 'bit', "'0'", 1),
+            param('IS_C_INVERTED', 'bit', "'0'", 1),
+            param('IS_D_INVERTED', 'bit', "'0'", 1),
+            param('SRTYPE', 'string', '"SYNC"'),
+        )),
+        {'R': "'L'", 'S': "'L'"},
+    ),
+    _with_port_defaults(
+        cell('ODDR', 'Q:o C:i CE:i D1:i D2:i R:i S:i', (
+            param('DDR_CLK_EDGE', 'string', '"OPPOSITE_EDGE"'),
+            param('INIT', 'bit', "'0'", 1),
+            param('IS_C_INVERTED', 'bit', "'0'", 1),
+            param('IS_D1_INVERTED', 'bit', "'0'", 1),
+            param('IS_D2_INVERTED', 'bit', "'0'", 1),
+            param('SRTYPE', 'string', '"SYNC"'),
+        )),
+        {'R': "'L'", 'S': "'L'"},
+    ),
+    cell('IDDRE1', 'Q1:o Q2:o C:i CB:i D:i R:i', (
+        param('DDR_CLK_EDGE', 'string', '"OPPOSITE_EDGE"'),
+        param('IS_CB_INVERTED', 'bit', "'0'", 1),
+        param('IS_C_INVERTED', 'bit', "'0'", 1),
+    )),
+    cell('ODDRE1', 'Q:o C:i D1:i D2:i SR:i', (
+        param('IS_C_INVERTED', 'bit', "'0'", 1),
+        param('IS_D1_INVERTED', 'bit', "'0'", 1),
+        param('IS_D2_INVERTED', 'bit', "'0'", 1),
+        _SIM_DEVICE,
+        param('SRVAL', 'bit', "'0'", 1),
+    )),
+    cell('IDELAYCTRL', 'RDY:o REFCLK:i RST:i', (
+        param('SIM_DEVICE', 'string', '"7SERIES"'),
+    )),
+    cell('MMCME2_BASE',
+         'CLKFBOUT:o CLKFBOUTB:o CLKOUT0:o CLKOUT0B:o CLKOUT1:o CLKOUT1B:o '
+         'CLKOUT2:o CLKOUT2B:o CLKOUT3:o CLKOUT3B:o CLKOUT4:o CLKOUT5:o '
+         'CLKOUT6:o LOCKED:o CLKFBIN:i CLKIN1:i PWRDWN:i RST:i', (
+        param('BANDWIDTH', 'string', '"OPTIMIZED"'),
+        param('CLKFBOUT_MULT_F', 'real', '5.000'),
+        param('CLKFBOUT_PHASE', 'real', '0.000'),
+        param('CLKIN1_PERIOD', 'real', '0.000'),
+        param('CLKOUT0_DIVIDE_F', 'real', '1.000'),
+        param('CLKOUT0_DUTY_CYCLE', 'real', '0.500'),
+        param('CLKOUT0_PHASE', 'real', '0.000'),
+        param('CLKOUT1_DIVIDE', 'integer', '1'),
+        param('CLKOUT1_DUTY_CYCLE', 'real', '0.500'),
+        param('CLKOUT1_PHASE', 'real', '0.000'),
+        param('CLKOUT2_DIVIDE', 'integer', '1'),
+        param('CLKOUT2_DUTY_CYCLE', 'real', '0.500'),
+        param('CLKOUT2_PHASE', 'real', '0.000'),
+        param('CLKOUT3_DIVIDE', 'integer', '1'),
+        param('CLKOUT3_DUTY_CYCLE', 'real', '0.500'),
+        param('CLKOUT3_PHASE', 'real', '0.000'),
+        param('CLKOUT4_CASCADE', 'boolean', 'FALSE'),
+        param('CLKOUT4_DIVIDE', 'integer', '1'),
+        param('CLKOUT4_DUTY_CYCLE', 'real', '0.500'),
+        param('CLKOUT4_PHASE', 'real', '0.000'),
+        param('CLKOUT5_DIVIDE', 'integer', '1'),
+        param('CLKOUT5_DUTY_CYCLE', 'real', '0.500'),
+        param('CLKOUT5_PHASE', 'real', '0.000'),
+        param('CLKOUT6_DIVIDE', 'integer', '1'),
+        param('CLKOUT6_DUTY_CYCLE', 'real', '0.500'),
+        param('CLKOUT6_PHASE', 'real', '0.000'),
+        param('DIVCLK_DIVIDE', 'integer', '1'),
+        param('REF_JITTER1', 'real', '0.010'),
+        param('STARTUP_WAIT', 'boolean', 'FALSE'),
+    )),
+    cell('PLLE2_BASE',
+         'CLKFBOUT:o CLKOUT0:o CLKOUT1:o CLKOUT2:o CLKOUT3:o CLKOUT4:o '
+         'CLKOUT5:o LOCKED:o CLKFBIN:i CLKIN1:i PWRDWN:i RST:i', (
+        param('BANDWIDTH', 'string', '"OPTIMIZED"'),
+        param('CLKFBOUT_MULT', 'integer', '5'),
+        param('CLKFBOUT_PHASE', 'real', '0.000'),
+        param('CLKIN1_PERIOD', 'real', '0.000'),
+        param('CLKOUT0_DIVIDE', 'integer', '1'),
+        param('CLKOUT0_DUTY_CYCLE', 'real', '0.500'),
+        param('CLKOUT0_PHASE', 'real', '0.000'),
+        param('CLKOUT1_DIVIDE', 'integer', '1'),
+        param('CLKOUT1_DUTY_CYCLE', 'real', '0.500'),
+        param('CLKOUT1_PHASE', 'real', '0.000'),
+        param('CLKOUT2_DIVIDE', 'integer', '1'),
+        param('CLKOUT2_DUTY_CYCLE', 'real', '0.500'),
+        param('CLKOUT2_PHASE', 'real', '0.000'),
+        param('CLKOUT3_DIVIDE', 'integer', '1'),
+        param('CLKOUT3_DUTY_CYCLE', 'real', '0.500'),
+        param('CLKOUT3_PHASE', 'real', '0.000'),
+        param('CLKOUT4_DIVIDE', 'integer', '1'),
+        param('CLKOUT4_DUTY_CYCLE', 'real', '0.500'),
+        param('CLKOUT4_PHASE', 'real', '0.000'),
+        param('CLKOUT5_DIVIDE', 'integer', '1'),
+        param('CLKOUT5_DUTY_CYCLE', 'real', '0.500'),
+        param('CLKOUT5_PHASE', 'real', '0.000'),
+        param('DIVCLK_DIVIDE', 'integer', '1'),
+        param('REF_JITTER1', 'real', '0.010'),
+        param('STARTUP_WAIT', 'string', '"FALSE"'),
+    )),
 ]
 PRIMITIVES = {spec.name.lower(): spec for spec in _CELLS}
 
@@ -240,6 +347,8 @@ def normalize_primitive(node, spec, interface=None):
                 if direction in ('in','inout'):
                     if not default:
                         raise ParseError(f'line {node.line}: primitive input {spec.name}.{name} cannot be left open without a template default')
+                    if default in ("'L'", "'H'"):
+                        continue
                     actual=tokenize(default)
             mapped.append(tokenize(name+' =>')+actual)
         if kind == 'port':
@@ -248,7 +357,7 @@ def normalize_primitive(node, spec, interface=None):
                     continue
                 if direction in ('in','inout') and not default:
                     raise ParseError(f'line {node.line}: missing required primitive port {spec.name}.{name}')
-                if default:
+                if direction in ('in','inout') and default and default not in ("'L'", "'H'"):
                     mapped.append(tokenize(name+' => '+default))
         result += tokenize(kind+' map (')
         for position, part in enumerate(mapped):
@@ -272,6 +381,11 @@ def parameter_expression(node, name, tokens, convert_expression):
         if len(tokens) != 1 or not tokens[0].text.startswith('"'):
             raise ParseError(f'line {node.line}: {name} requires a string literal in the supported primitive template')
         return json.dumps(tokens[0].text[1:-1].replace('""','"'), ensure_ascii=False)
+    if kind == 'real':
+        text = ''.join(t.text for t in tokens).replace('_', '')
+        if re.fullmatch(r'[+-]?(?:\d+\.\d*|\d+)(?:[eE][+-]?\d+)?', text):
+            return text
+        return convert_expression(tokens)
     if kind == 'boolean':
         if len(tokens) == 1 and tokens[0].lower in ('true','false'):
             return '"'+tokens[0].text.upper()+'"'

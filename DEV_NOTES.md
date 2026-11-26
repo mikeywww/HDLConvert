@@ -61,3 +61,10 @@
 - VHDL reductions and packed-bit logical truth use IEEE 2008 std_logic_1164 unary and/or/xor operators returning std_logic. Keep reduction results out of the boolean path, including negated/XNOR aliases, and keep generic-default expressions valid in entity scope. Source interface behavior is checked by independent Icarus/GHDL four-state traces; no IEEE implementation code is copied.
 - Concurrent concatenated targets are split only for distinct whole packed signals of statically proved widths, using a normalized unsigned extraction helper. RHS user functions and procedural concatenations are rejected until a single-evaluation/atomic scheduling transformation exists. Recursively enumerate concatenation leaves in target ownership; empty root names must not erase driver evidence.
 - Corpus measurement is not a new conversion backend or coverage promise. Track original/derived provenance, hashes, all six directional denominators and compiler outcomes separately. Unexpected conversion exceptions are internal_error, not unsupported syntax. VHDL backend context supplies a declaration/statement line when ParseError lacks one.
+# 2026-10-02 DDR3 冗余 cast 修复
+
+`hdl/verilog.py` 原先为每个 SV 尺寸转换生成 identity function，即使目标赋值已提供相同尺寸。现在只在整个 RHS 上消除同目标宽度的 cast；等宽位操作以 concat 保持自定位宽，避免父表达式扩大中间运算；剩余 helper 的固定尺寸化简并合并。参数尺寸不按默认值冻结。DDR3 helper 7→2；230 项回归、5000 周期转换链、冻结 EXE 编译/输出一致性验证通过。新本地 EXE 为 2.1.1，详情见 RELEASE.md。
+
+## 2026-10-02：保留 DDR3 选择分支编写逻辑 / 2.1.2
+原 selected assignment 被过度改写成 hdl_select(...value_0,...value_11)。现在分支常量直接赋给 debug_state_decode，case 标签、others、时间零求值保留；无法安全内联的动态表达式继续显式作为函数输入。DDR3 无 value_* 和 hdl_cast_*，计数表达式恢复为 next_count = {1'b0, completed} + 33'd1。常量尺寸和无符号扩展直接生成常量或拼接；一般截断/符号/参数相关转换仍保留必要边界。
+231 项回归无失败/错误/跳过。新增 time-zero/X/Z/default/dynamic-branch 检查通过；Icarus 及 Vivado 原 VHDL/译后 Verilog/SV 混合语言 5000 周期对照通过；冻结 2.1.2 原生 GUI/工程/四态验收、DDR3 API 输出一致性/Verilog-2005 编译通过。有限仿真不代表全域形式等价。日志和候选 hash 见 RELEASE.md。当前候选 dist/HDLConvert-2.1.2.exe；开发目录 D:\WORK\PRJ\HDLConvert；旧 EXE/现有未提交修改保留，未推送或发布。

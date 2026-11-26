@@ -225,3 +225,19 @@ Independent original Verilog-2005/SystemVerilog-2012 Icarus traces and generated
 Built dist/HDLConvert-2.1.0.exe with Python3.14, Tcl8.6, PyInstaller6.22.3 and pinned build requirements. Size9,908,457bytes; SHA256 `a7313219e7669a90c113cfe3268d303853f918a1399041c25892c2ce436b6e82`. PE GUI subsystem/version, CLI/version/licenses/native TkDnD, Chinese/GBK paths, file lists, unordered dependencies, metadata-only SV packages, transitive directory discovery, JSON/error-line reporting and unchanged old outputs on context failure passed in isolated scratch storage with Windows-only app PATH and no Python/Tcl environment. Default acceptance also passed fragments, legacy array golden output, DDR3 conversion chain, child ownership and audit refusal cases. The frozen EXE itself generated the VHDL used for a fresh2568-row differential check; host simulators ran with their own environment, independent of the app's restricted PATH. Retained trace evidence: build/frozen-four-state-2.1.0/. Acceptance logs: build/release-2.1.0.log and stage34-verification.log. Artifact metadata/source hashes: build/release-2.1.0.json; build log: build/stage34-build.log.
 
 Finite validation does not prove arbitrary four/nine-value expressions, parameter overrides, full scheduling or physical IP behavior. No new Vivado large differential simulation, formal proof, Git push, tag or Release publication occurred. Existing2.0.8 records remain historical evidence for that snapshot.
+# 2026-10-02：DDR3 cast 清理 / 2.1.1
+
+- `scripts/run_tests.py --suite all --require-simulator --require-vhdl-simulator`：230 项通过，无失败/错误/跳过（`build/cast-test-report.json`）。新增测试覆盖 DDR3 输出、参数覆盖边界、溢出、嵌套尺寸转换、符号扩展及 X/Z。
+- `scripts/validate_roundtrip.py --stage prepare` 后 `--stage family`：Verilog-2005/SV 四条链编译及 5000 周期对照通过；208 次接受、207 次响应、全部状态覆盖。本次不宣称原 VHDL 混合语言等价性。
+- 冻结 2.1.1 在 System32-only PATH 下生成 DDR3 Verilog，与源码 API 文本一致，转换 helper 7→2，Verilog-2005 编译通过；`build/cast-frozen-ddr3/report.json`。
+- `scripts/verify_release.py --exe dist/HDLConvert-2.1.1.exe --engineering`：隔离 PE/版本/许可/原生 GUI、依赖/搜索/文件列表/JSON/失败保护、诊断及 2568 行四态对照通过；`build/cast-frozen-verification.log`。
+
+## 2026-10-02：保留 DDR3 选择分支编写逻辑 / 2.1.2
+原 selected assignment 被过度改写成 hdl_select(...value_0,...value_11)。现在分支常量直接赋给 debug_state_decode，case 标签、others、时间零求值保留；无法安全内联的动态表达式继续显式作为函数输入。DDR3 无 value_* 和 hdl_cast_*，计数表达式恢复为 next_count = {1'b0, completed} + 33'd1。常量尺寸和无符号扩展直接生成常量或拼接；一般截断/符号/参数相关转换仍保留必要边界。
+231 项回归无失败/错误/跳过。新增 time-zero/X/Z/default/dynamic-branch 检查通过；Icarus 及 Vivado 原 VHDL/译后 Verilog/SV 混合语言 5000 周期对照通过；冻结 2.1.2 原生 GUI/工程/四态验收、DDR3 API 输出一致性/Verilog-2005 编译通过。有限仿真不代表全域形式等价。日志和候选 hash 见 RELEASE.md。当前候选 dist/HDLConvert-2.1.2.exe；开发目录 D:\WORK\PRJ\HDLConvert；旧 EXE/现有未提交修改保留，未推送或发布。
+
+## 2026-11-27：老项目平台迁移 M1–M3 验证记录
+
+- `.\.venv\Scripts\python.exe scripts/run_tests.py --suite all --require-simulator --require-vhdl-simulator`：**254 项全部通过**（0 失败 / 0 错误 / 0 跳过），包括新增 `tests/test_migration_features.py` 22 项 Icarus/GHDL 编译与行为仿真测试，以及全部 43 个 Vivado 2025.2 UNISIM 原语接口与 Verilog 模型核对（`tests/test_primitives.py`）。
+- `.\.venv\Scripts\python.exe scripts/evaluate_corpus.py tests/corpus/manifest.json --compile --report build/m3-corpus-final.json`：13 样本、26 次六向转换尝试 **26/26（100%）** 完整转换并通过 Icarus (`-g2005`/`-g2012`) / GHDL (`--std=08`) 编译检查，含原唯一阻塞样本 `tests/sv/aurora_packet_bridge.sv → VHDL` 及新增 `sync_fifo.sv`、`reg_bank.v`、`legacy_alu.vhd`。
+- `.\.venv\Scripts\python.exe scripts/validate_sv_bridge.py --vhdl build/m1-bridge-vhdl/aurora_packet_bridge.vhd --work build/m1-sv-vhdl-compare`：Vivado 2025.2 `xvlog`/`xvhdl -2008`/`xelab`/`xsim` 混合语言对照 **PASS**——原生 SV 与生成 VHDL 在覆盖参数下 698 周期、1,396 次上升/下降沿比较、全部 19 个输出端口 100% 一致（覆盖 3 种 FSM 状态、18 拍 TX、15 周期背压、3 完整帧、177 length/98 keep/197 control 错误与 1 次溢出）。有限仿真不代表全域形式等价；尚未重新打包 2.2.0 EXE，未推送或发布。

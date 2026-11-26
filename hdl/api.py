@@ -13,7 +13,7 @@ from hdlconvert.parser import Parser as VHDLParser
 from hdlconvert.generator import Generator as LegacyGenerator
 from hdlconvert.encoding import read_source, atomic_write_text
 from .parser import Parser
-from .verilog import VerilogGenerator, walk, targets, root_name, target_names, validate_case_qualifiers
+from .verilog import VerilogGenerator, walk, targets, root_name, target_names, validate_case_qualifiers, check_process_drivers
 from .vhdl import VHDLGenerator
 
 LANGUAGES=('vhdl','verilog','systemverilog')
@@ -93,14 +93,10 @@ def convert_text(source, *, source_language=None, target_language='systemverilog
         if dst=='vhdl':
             for module in neutral.modules:
                 validate_case_qualifiers(module)
-                owners={}; continuous=set()
+                check_process_drivers(module.statements)
                 for n in walk(module.statements):
-                    if n.kind=='process':
-                        for name in targets(n.body):owners[name]=owners.get(name,0)+1
-                        if not n.data['events'] and n.data['flavor']=='always':
-                            diagnostics.append(Diagnostic(n.line,'VHDL process executes at time zero; original Verilog always sensitivity semantics require startup review'))
-                    elif n.kind=='assignment' and n.data['concurrent']:continuous.update(target_names(n.data['target']))
-                if any(count>1 or name in continuous for name,count in owners.items()):raise ParseError('multiple or mixed process drivers require manual ownership review')
+                    if n.kind=='process' and not n.data['events'] and n.data['flavor']=='always':
+                        diagnostics.append(Diagnostic(n.line,'VHDL process executes at time zero; original Verilog always sensitivity semantics require startup review'))
         backend=VHDLGenerator() if dst=='vhdl' else VerilogGenerator(dst)
         output=backend.generate(neutral)
         inline_diagnostics=[d for d in diagnostics if 'declaration initialization preserved:' not in d.message and 'declaration initializer omitted for child output' not in d.message]

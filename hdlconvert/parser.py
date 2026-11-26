@@ -7,6 +7,8 @@ import re
 def parse_range(tokens):
     if len(tokens) >= 2 and tokens[-1].text == '<>' and tokens[-2].lower == 'range':
         return Range([], 'unconstrained', [])
+    if len(tokens) >= 3 and tokens[-2].text == "'" and tokens[-1].lower in ('range', 'reverse_range'):
+        return Range(tokens[:-2], 'attr_' + tokens[-1].lower, [])
     for direction in ('to', 'downto'):
         parts = split(tokens, direction)
         if len(parts) == 2 and all(parts):
@@ -310,6 +312,8 @@ class Parser:
         raw=[t.lower for t in ts]
         if raw==['ieee','.','std_logic_unsigned','.','all']:
             return ['__hdl_unsigned_arithmetic']
+        if raw==['ieee','.','std_logic_signed','.','all']:
+            return ['__hdl_signed_arithmetic']
         if len(ts)==5 and raw[0]=='work' and raw[1]==raw[3]=='.' and raw[-1]=='all':
             return [ts[2].text]
         return []

@@ -49,8 +49,8 @@ class ConversionTests(unittest.TestCase):
 
     def test_comb_variable(self):
         text = self.clean(unit(body="process(all) variable v: std_logic; begin v:=not d; q<=v and rst; end process;"))
-        self.assertIn('v = (~d)', text)
-        self.assertIn('q = (v & rst)', text)
+        self.assertIn('v = ~d;', text)
+        self.assertIn('q = v & rst;', text)
 
     def test_case_enum_for(self):
         text = self.clean(unit('type state_t is (IDLE, RUN, DONE); signal state: state_t := IDLE; signal data: std_logic_vector(7 downto 0);',

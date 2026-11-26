@@ -20,7 +20,7 @@ class CorpusTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)
             (root/'a.v').write_text('module a(input d,output q);assign q=d;endmodule')
-            (root/'b.sv').write_text('module b(input clk,d,output reg q);always @(posedge clk){q}<=d;endmodule')
+            (root/'b.sv').write_text('module b(input clk,d,output reg q);always @(posedge clk)begin q<=d;q=d;end endmodule')
             manifest=self.manifest(folder,[{'id':'a','path':'a.v','sample_kind':'synthetic'},
                                            {'id':'b','path':'b.sv','sample_kind':'synthetic'}])
             with patch('scripts.evaluate_corpus.shutil.which',return_value=None):

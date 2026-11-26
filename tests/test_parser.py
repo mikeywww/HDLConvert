@@ -26,7 +26,7 @@ class ParserTests(unittest.TestCase):
         symbols.add('Data', 'signal', TypeInfo('logic [7:0]', vector=True))
         expr = Expressions(symbols)
         self.assertEqual(expr(tokenize("data(7 downto 4) & x\"F\"")), "{Data[7:4], 4'hF}")
-        self.assertEqual(expr(tokenize('1 + 2 * 3')), '(1 + (2 * 3))')
+        self.assertEqual(expr(tokenize('1 + 2 * 3')), '1 + 2 * 3')
         self.assertEqual(expr(tokenize("(others => '0')")), "'0")
 
     def test_malformed(self):
@@ -35,5 +35,5 @@ class ParserTests(unittest.TestCase):
 
     def test_unary_sign_precedence(self):
         expr = Expressions(Symbols())
-        self.assertEqual(expr(tokenize('-2 ** 2')), '(-(2 ** 2))')
-        self.assertEqual(expr(tokenize('(-2) ** 2')), '((-2) ** 2)')
+        self.assertEqual(expr(tokenize('-2 ** 2')), '-(2 ** 2)')
+        self.assertEqual(expr(tokenize('(-2) ** 2')), '-2 ** 2')

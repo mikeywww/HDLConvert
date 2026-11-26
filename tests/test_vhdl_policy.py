@@ -38,7 +38,7 @@ class VHDLDeclarationPolicyTests(unittest.TestCase):
             result = convert_text(source, source_language='vhdl', target_language=target)
             self.assertFalse(result.diagnostics, [str(d) for d in result.diagnostics])
             self.assertNotRegex(result.text, r'\b(?:int|integer)\s+[ab]\s*=')
-            self.assertLess(result.text.index('a = (x + 1);'), result.text.index('b = (a * 2);'))
+            self.assertLess(result.text.index('a = x + 1;'), result.text.index('b = a * 2;'))
         design = Parser(source).parse()
         remove_declaration_initializers(design)
         fn = design.units[1].data['decl'][0]
@@ -56,7 +56,7 @@ class VHDLDeclarationPolicyTests(unittest.TestCase):
         self.assertFalse(result.diagnostics)
         self.assertIn('parameter int w = 8', result.text)
         self.assertIn('int y;', result.text)
-        self.assertIn('y = (x + 2);', result.text)
+        self.assertIn('y = x + 2;', result.text)
 
 
 if __name__ == '__main__':

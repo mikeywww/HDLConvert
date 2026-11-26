@@ -123,7 +123,7 @@ endmodule'''
             output = path / 'existing.v'
             original = b'// valid output must survive\nmodule old();endmodule\n'
             for directive in ('`define WIDTH 8', '`include "not_supplied.svh"',
-                              '`ifdef FEATURE', '`default_nettype none'):
+                              '`ifdef FEATURE', '`default_nettype wand'):
                 with self.subTest(directive=directive):
                     source.write_text('`timescale 1ns/1ps\n' + directive +
                                       '\nmodule m();endmodule\n', encoding='utf-8')

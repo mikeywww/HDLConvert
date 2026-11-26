@@ -25,7 +25,7 @@ class StabilityTests(unittest.TestCase):
 
     def test_vhdl_backend_diagnostics_keep_failing_declaration_or_statement_line(self):
         for source, line in [
-            ('module m(output q);\nlocalparam N=$clog2(4);\nassign q=0;endmodule',2),
+            ('module m(output q);\nlocalparam N=$unknown_sysfn(4);\nassign q=0;endmodule',2),
             ('module m(input integer d,output q);\n\nassign q=^d;endmodule',3),
         ]:
             result=convert_text(source,source_language='verilog',target_language='vhdl')

@@ -6,7 +6,7 @@ parsed immediately into Expr nodes; structural nodes are mapped directly.
 import copy
 import re
 from hdlconvert.generator import Generator
-from hdlconvert.symbols import Symbols, TypeInfo
+from hdlconvert.symbols import Symbols, TypeInfo, resolve_attr_range, expand_case_choice
 from hdlconvert.ast import Node
 from hdlconvert.ast import Diagnostic
 from hdlconvert.lexer import ParseError, words, split as v_split
@@ -106,7 +106,7 @@ class VHDLAdapter:
             raise ParseError(f'line {n.line}: {n.kind} lowering to neutral IR not supported')
         self.g.declaration(n) # registers original language symbol/type metadata
         typ=self.neutral_type(n.data['type'])
-        direction={'in':'input','out':'output','inout':'inout','':''}.get(n.data.get('direction',''))
+        direction={'in':'input','out':'output','inout':'inout','buffer':'output','':''}.get(n.data.get('direction',''))
         if direction is None:raise ParseError('unsupported direction')
         kind={'generic':'parameter','constant':'localparam','variable':'variable'}.get(n.kind,n.kind)
         if kind in ('parameter','localparam') and typ.kind=='bits' and not typ.bounds and not typ.enum:
@@ -131,6 +131,7 @@ class VHDLAdapter:
             a=arches[0];self.g.symbols=Symbols();self.enums={};self.types={};self.functions=[];self.nt_symbols={};self.interfaces=dict(entity_interfaces)
             self.enum_comments={};self.pending_comments=[]
             self.g.symbols.unsigned_arithmetic=a.data.get('unsigned_arithmetic',False)
+            self.g.symbols.signed_arithmetic=a.data.get('signed_arithmetic',False)
             self.interfaces.update({d.name.lower():[(p.name.lower(),p.data.get('direction','in')) for p in d.children if p.kind=='port'] for d in a.data['decl'] if d.kind=='component'})
             if entity.data['imports'] or a.data['imports']:raise ParseError('package metadata requires legacy VHDL-to-SV path')
             m=Module(entity.name.lower(),source=entity.source+'\n'+a.source,line=entity.line,comments=copy.deepcopy(entity.comments),architecture_comments=copy.deepcopy(a.comments))
@@ -201,7 +202,8 @@ class VHDLAdapter:
                 choices=[]
                 for values,body in d['choices']:
                     default=any(words(v).lower()=='others' for v in values)
-                    choices.append(([] if default else [self.expr(v) for v in values],self.statements(body,'comb' if k=='select' else context)))
+                    expanded=[] if default else [self.expr(item) for v in values for item in expand_case_choice(v,self.g.symbols)]
+                    choices.append((expanded,self.statements(body,'comb' if k=='select' else context)))
                 s=Statement('case',dict(expression=self.expr(d['expr']),choices=choices))
                 if k=='select':
                     # Continuous function evaluation retains VHDL time-zero
@@ -210,17 +212,28 @@ class VHDLAdapter:
                     target=choices[0][1][0].data['target']
                     if selector.kind!='name' or target.kind!='name':raise ParseError('selected assignment needs declared scalar/vector selector and target')
                     if not any(not values for values,_ in choices):raise ParseError('selected assignment requires others coverage')
-                    name='hdl_select_'+str(len(self.functions))
+                    name=target.value+'_decode'
+                    if name in self.nt_symbols or any(fn['name']==name for fn in self.functions):
+                        name='hdl_select_'+str(len(self.functions))
                     if name in self.nt_symbols:raise ParseError('selected function name collision')
                     typ=self.nt_symbols[target.value.lower()]
-                    args=[Declaration('sel',self.nt_symbols[selector.value.lower()],'port','input')]
+                    args=[Declaration(selector.value,self.nt_symbols[selector.value.lower()],'port','input')]
                     actuals=[selector];fnchoices=[]
+                    def inlineable(e):
+                        if e.kind=='name':
+                            symbol=self.g.symbols.find(e.value)
+                            return e.value==selector.value or bool(symbol and symbol.kind in ('constant','generic','enum_literal'))
+                        if e.kind=='call' and e.value not in ('$signed','$unsigned','$clog2','$bits'):return False
+                        return all(inlineable(a) for a in e.args)
                     for i,(values,body) in enumerate(choices):
                         if len(body)!=1 or body[0].kind!='assignment' or body[0].data['target']!=target:raise ParseError('unsupported selected assignment body')
-                        arg='value_'+str(i);args.append(Declaration(arg,typ,'port','input'));actuals.append(body[0].data['value'])
-                        fnchoices.append((values,[Statement('assignment',dict(target=Expr('name',name),value=Expr('name',arg),op='=',concurrent=False))]))
+                        value=body[0].data['value']
+                        if not inlineable(value):
+                            arg='value_'+str(i);args.append(Declaration(arg,typ,'port','input'));actuals.append(value)
+                            value=Expr('name',arg)
+                        fnchoices.append((values,[Statement('assignment',dict(target=Expr('name',name),value=value,op='=',concurrent=False),comments=body[0].comments)]))
                     choices_comments={key:copy.deepcopy(value) for key,value in n.comments.items() if key.startswith('choice_')}
-                    self.functions.append(dict(name=name,type=typ,args=args,locals=[],automatic=True,body=[Statement('case',dict(expression=Expr('name','sel'),choices=fnchoices),comments=choices_comments)]))
+                    self.functions.append(dict(name=name,type=typ,args=args,locals=[],automatic=True,body=[Statement('case',dict(expression=selector,choices=fnchoices),comments=choices_comments)]))
                     s=Statement('assignment',dict(target=target,value=Expr('call',name,actuals),op='=',concurrent=True))
             elif k=='process':s=self.process(n)
             elif k=='return':s=Statement('return',dict(value=self.expr(d['value'])))
@@ -230,10 +243,11 @@ class VHDLAdapter:
             elif k in ('for','generate'):
                 gen=k=='generate'
                 if 'variable' in d:
+                    rng=resolve_attr_range(d['range'],self.g.symbols)
                     old=self.g.symbols;self.g.symbols=Symbols(old)
                     name=d['variable'];self.g.symbols.add(name,'loop',TypeInfo('int'))
-                    ascending=d['range'].direction=='to'
-                    start=self.expr(d['range'].left);end=self.expr(d['range'].right)
+                    ascending=rng.direction=='to'
+                    start=self.expr(rng.left);end=self.expr(rng.right)
                     body=self.statements(n.children,'concurrent' if gen else context)
                     self.g.symbols=old
                     s=Statement('for',dict(name=name,start=start,condition=Expr('binary','<=' if ascending else '>=',[Expr('name',name),end]),

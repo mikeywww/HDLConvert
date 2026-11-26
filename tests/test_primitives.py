@@ -39,11 +39,13 @@ class PrimitiveTests(unittest.TestCase):
                                  [(name,kind) for name,kind,_,_ in spec.generics])
                 model=(VIVADO/'data/verilog/src/unisims'/f'{spec.name}.v').read_text()
                 for name,kind,width,_ in spec.generics:
-                    self.assertRegex(model,r'\bparameter\s+(?:integer\s+)?(?:\[[^]]+\]\s*)?'+name+r'\s*=')
+                    self.assertRegex(model,r'\bparameter\s+(?:(?:integer|real)\s+)?(?:\[[^]]+\]\s*)?'+name+r'\s*=')
                     if width:
                         bound=re.search(r'\bparameter\s*\[(\d+):0\]\s*'+name+r'\s*=',model)
-                        self.assertIsNotNone(bound)
-                        self.assertEqual(int(bound.group(1))+1,width)
+                        sized=re.search(r'\bparameter\s+'+name+r"\s*=\s*(\d+)'[bBhHoOdD]",model)
+                        self.assertTrue(bound is not None or sized is not None,f'{spec.name}.{name} width missing')
+                        model_width=int(bound.group(1))+1 if bound else int(sized.group(1))
+                        self.assertEqual(model_width,width)
 
     def test_positional_uses_vhdl_order_and_named_formals(self):
         n=instance('u:IBUFDS_GTE4 generic map(\'0\',"01","10")port map(o,b,\'0\',p,n);')

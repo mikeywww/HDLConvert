@@ -7,7 +7,7 @@ import re
 from dataclasses import replace
 from .ir import Type, Expr
 from .lex import literal_int, constant_difference
-from .verilog import walk, root_name, targets, sv_expr
+from .verilog import walk, root_name, targets, target_names, sv_expr
 from hdlconvert.lexer import ParseError
 
 
@@ -32,12 +32,34 @@ class VHDLGenerator:
         if e.kind=='unary' and e.value in ('+','-'): return e.value+self.integer(e.args[0])
         if e.kind in ('cast','call') and self.etype(e).kind=='integer':return self.expr(e)
         raise ParseError('unsupported integer/range expression')
+    def width_expr(self,t):
+        if t.kind=='integer': return Expr('literal','32')
+        if not t.bounds: return Expr('literal','1')
+        w=self.bits(t)
+        if w is not None: return Expr('literal',str(w))
+        l,r=t.bounds
+        if self.direction(t.bounds)=='to': l,r=r,l
+        try:
+            if literal_int(r)==0 and l.kind=='binary' and l.value=='-' and literal_int(l.args[1])==1:
+                return l.args[0]
+        except ValueError: pass
+        return Expr('binary','+',[Expr('binary','-',[l,r]),Expr('literal','1')])
+    def max_width_expr(self,x,y):
+        wx,wy=self.bits(x),self.bits(y)
+        if wx is not None and wy is not None: return Expr('literal',str(max(wx,wy)))
+        if wx==1 and y.bounds: return self.width_expr(y)
+        if wy==1 and x.bounds: return self.width_expr(x)
+        if x.bounds and y.bounds and x.bounds==y.bounds: return self.width_expr(x)
+        return Expr('call','hdl_max',[self.width_expr(x),self.width_expr(y)])
     def direction(self,bounds):
         try: return 'downto' if constant_difference(*bounds)>=0 else 'to'
         except ValueError:
-            # Symbolic descending bounds only when right bound is literal 0.
+            # Symbolic descending bounds when right bound is 0; ascending when left bound is 0.
             try:
                 if literal_int(bounds[1])==0: return 'downto'
+            except ValueError: pass
+            try:
+                if literal_int(bounds[0])==0: return 'to'
             except ValueError: pass
             raise ParseError('cannot prove direction of symbolic packed range')
     def width(self,t):
@@ -45,17 +67,24 @@ class VHDLGenerator:
         if not t.bounds: return '1'
         try:return str(abs(constant_difference(*t.bounds))+1)
         except ValueError:pass
-        l,r=map(self.integer,t.bounds)
-        return '('+l+' - '+r+' + 1)' if self.direction(t.bounds)=='downto' else '('+r+' - '+l+' + 1)'
-    def typ(self,t):
+        return self.integer(self.width_expr(t))
+    def typ(self,t,is_param=False):
         if t.dimensions:
             key=repr(t)
             if key not in self.array_types:raise ParseError('array type missing declaration context')
             return self.name(self.array_types[key][0])
-        if t.kind=='integer': return 'integer'
+        if t.kind=='integer':
+            if not t.signed:
+                return 'natural' if is_param else 'unsigned(31 downto 0)'
+            return 'integer'
         if t.kind=='boolean': return 'boolean'
         if not t.bounds: return 'std_logic'
         return ('signed' if t.signed else 'unsigned')+'('+self.integer(t.bounds[0])+' '+self.direction(t.bounds)+' '+self.integer(t.bounds[1])+')'
+    def effective_type(self,d):
+        t=d.type
+        if t.kind=='integer' and not t.signed and d.kind not in ('parameter','localparam'):
+            return replace(t,kind='bits',signed=False,bounds=(Expr('literal','31'),Expr('literal','0')))
+        return t
     def etype(self,e):
         k,v,a=e.kind,e.value,e.args
         if k=='name':
@@ -72,10 +101,14 @@ class VHDLGenerator:
             base=self.etype(a[0])
             return replace(base,dimensions=base.dimensions[1:]) if base.dimensions else Type()
         if k=='slice': return Type(bounds=tuple(a[1:]))
+        if k=='part_select': return Type(bounds=(Expr('binary','-',[a[2],Expr('literal','1')]),Expr('literal','0')))
         if k=='field':
             return self.etype(a[0]).fields[v][0]
         if k=='call' and v in self.function_types:return self.function_types[v]['type']
-        if k=='call' and v=='$bits':return Type('integer',True)
+        if k=='call' and v in ('$bits','hdl_max'):return Type('integer',True)
+        if k=='call' and v=='$clog2':
+            if len(a)!=1: raise ParseError('$clog2 requires one argument')
+            return Type('integer',False)
         if k=='cast':
             if a[0]==Expr('name','int'):return Type('integer',True)
             size=self.fold_bits(a[0])
@@ -91,13 +124,16 @@ class VHDLGenerator:
             if v in ('==','!=','<','>','<=','>='): return Type('boolean')
             if v in ('<<','>>','<<<','>>>'): return self.etype(a[0])
             x,y=map(self.etype,a)
-            if x.kind==y.kind=='integer': return x
+            if x.kind==y.kind=='integer': return Type('integer',x.signed and y.signed)
             if x.kind==y.kind=='boolean' and v in ('&','|','^','~^','^~'): return Type('boolean')
             if not x.bounds and not y.bounds and x.kind==y.kind=='bits': return Type()
             wx,wy=self.bits(x),self.bits(y)
             if wx is None or wy is None:
-                if x.bounds!=y.bounds: raise ParseError('symbolic mixed expression widths require explicit sizing')
-                return Type(x.kind,x.signed and y.signed,x.bounds)
+                if x.bounds==y.bounds: return Type(x.kind,x.signed and y.signed,x.bounds)
+                if x.kind=='bits' and not x.bounds and y.bounds: return Type('bits',x.signed and y.signed,y.bounds)
+                if y.kind=='bits' and not y.bounds and x.bounds: return Type('bits',x.signed and y.signed,x.bounds)
+                mw=self.max_width_expr(x,y)
+                return Type(signed=x.signed and y.signed,bounds=(Expr('binary','-',[mw,Expr('literal','1')]),Expr('literal','0')))
             return Type(signed=x.signed and y.signed,bounds=(Expr('literal',str(max(wx,wy)-1)),Expr('literal','0')))
         if k=='conditional':
             x,y=map(self.etype,a[1:])
@@ -129,11 +165,19 @@ class VHDLGenerator:
         if not t.bounds: return 1
         try: return abs(constant_difference(*t.bounds))+1
         except ValueError: return None
+    def int_to_vector(self,e,rendered,target_signed,size):
+        if target_signed:
+            return 'to_signed('+rendered+', '+size+')'
+        try:
+            if literal_int(e)>=0: return 'to_unsigned('+rendered+', '+size+')'
+        except ValueError: pass
+        if e.kind=='name' and not self.etype(e).signed:
+            return 'to_unsigned('+rendered+', '+size+')'
+        return 'unsigned(to_signed('+rendered+', '+size+'))'
     def numeric_arg(self,e,t):
         old=self.etype(e);size=self.width(t);cast='signed' if t.signed else 'unsigned'
         if old.kind=='integer':
-            value='to_signed('+self.expr(e)+', '+size+')'
-            return value if t.signed else 'unsigned('+value+')'
+            return self.int_to_vector(e,self.expr(e),t.signed,size)
         if not old.bounds:return self.expr(e,t)
         inner=self.expr(e,t) if e.kind=='binary' and e.value in ('+','-','*','/','%','&','|','^') else self.expr(e)
         return 'resize('+cast+'('+inner+'), '+size+')'
@@ -172,7 +216,10 @@ class VHDLGenerator:
                     bits=(padding*max(0,size-len(bits))+bits)[-size:]
                 s=("'"+bits+"'") if size==1 else ('signed' if t.signed else 'unsigned')+"'(\""+bits+'\")'
         elif k=='index':
-            it=self.etype(a[1]);index='to_integer('+self.expr(a[1])+')' if it.bounds else self.integer(a[1])
+            it=self.etype(a[1])
+            if it.bounds: index='to_integer('+self.expr(a[1])+')'
+            elif it.kind=='bits': index="to_integer(unsigned'(0 => "+self.expr(a[1])+"))"
+            else: index=self.integer(a[1])
             base=a[0]
             if base.kind=='field':
                 _,_,offset=self.etype(base.args[0]).fields[base.value]
@@ -184,6 +231,26 @@ class VHDLGenerator:
                 _,_,offset=self.etype(base.args[0]).fields[base.value]
                 bounds=[Expr('binary','+',[x,Expr('literal',str(offset))]) for x in bounds];base=base.args[0]
             s=self.expr(base)+'('+self.integer(bounds[0])+' '+self.direction(tuple(bounds))+' '+self.integer(bounds[1])+')'
+        elif k=='part_select':
+            base=a[0]; base_t=self.etype(base)
+            if not base_t.bounds or base_t.dimensions: raise ParseError('indexed part-select requires packed vector')
+            vec_dir=self.direction(base_t.bounds)
+            w_int=self.integer(a[2])
+            try: w_val=literal_int(a[2])
+            except ValueError: w_val=None
+            if w_val is not None and w_val<1: raise ParseError('indexed part-select width must be positive')
+            it=self.etype(a[1])
+            if it.bounds: idx='to_integer('+self.expr(a[1])+')'
+            elif it.kind=='bits': idx="to_integer(unsigned'(0 => "+self.expr(a[1])+"))"
+            else: idx=self.integer(a[1])
+            if base.kind=='field':
+                _,_,offset=self.etype(base.args[0]).fields[base.value]
+                idx='('+idx+' + '+str(offset)+')'; base=base.args[0]
+            if vec_dir=='downto':
+                hi,lo=('('+idx+' + '+w_int+' - 1)',idx) if v=='+:' else (idx,'('+idx+' - '+w_int+' + 1)')
+            else:
+                hi,lo=(idx,'('+idx+' + '+w_int+' - 1)') if v=='+:' else ('('+idx+' - '+w_int+' + 1)',idx)
+            s=self.expr(base)+'('+hi+' '+vec_dir+' '+lo+')'
         elif k=='field':
             _,high,low=self.etype(a[0]).fields[v]
             s=self.expr(a[0])+'('+str(low)+')' if high==low else self.expr(a[0])+'('+str(high)+' downto '+str(low)+')'
@@ -193,6 +260,25 @@ class VHDLGenerator:
                 if len(a)!=len(args):raise ParseError('function argument count mismatch: '+v)
                 s=self.name(v)+'('+', '.join(self.expr(value,arg.type) for value,arg in zip(a,args))+')'
             elif v=='$bits':s=self.width(self.etype(a[0]))
+            elif v=='hdl_max':s='hdl_max('+self.integer(a[0])+', '+self.integer(a[1])+')'
+            elif v=='$clog2':
+                if len(a)!=1:raise ParseError('$clog2 requires one argument')
+                arg_t=self.etype(a[0])
+                if arg_t.dimensions or arg_t.kind not in ('integer','bits'):
+                    raise ParseError('$clog2 requires an integer or packed vector argument')
+                if arg_t.kind=='integer':
+                    try: arg_val=literal_int(a[0])
+                    except ValueError: arg_val=None
+                    if arg_val is not None and arg_val<0:
+                        raise ParseError('$clog2 of negative integer requires explicit unsigned width')
+                    s='hdl_clog2('+self.expr(a[0])+')'
+                elif not arg_t.bounds:
+                    s="hdl_clog2(to_integer(unsigned'(0 => "+self.expr(a[0])+')))'
+                else:
+                    w=self.bits(arg_t)
+                    if w is None or w>31:
+                        raise ParseError('$clog2 on vector wider than 31 bits or symbolic width requires integer conversion')
+                    s='hdl_clog2(to_integer(unsigned('+self.expr(a[0])+')))'
             elif v in ('$signed','$unsigned'):
                 old=self.etype(a[0]);inner=self.expr(a[0])
                 s=(('signed' if v=='$signed' else 'unsigned')+'('+inner+')') if old.bounds else inner
@@ -255,15 +341,30 @@ class VHDLGenerator:
                 if left.bounds or right.bounds:
                     wx,wy=self.bits(left),self.bits(right)
                     if wx is None or wy is None:
-                        if left.bounds!=right.bounds: raise ParseError('symbolic mixed widths require explicit sizing')
-                        common=Type(signed=left.signed and right.signed,bounds=left.bounds)
+                        if left.bounds==right.bounds:
+                            common=Type(signed=left.signed and right.signed,bounds=left.bounds)
+                        elif left.kind=='bits' and not left.bounds and right.bounds:
+                            common=Type(signed=left.signed and right.signed,bounds=right.bounds)
+                        elif right.kind=='bits' and not right.bounds and left.bounds:
+                            common=Type(signed=left.signed and right.signed,bounds=left.bounds)
+                        else:
+                            mw=self.max_width_expr(left,right)
+                            common=Type(signed=left.signed and right.signed,bounds=(Expr('binary','-',[mw,Expr('literal','1')]),Expr('literal','0')))
+                        if expected and expected.bounds and t.kind!='boolean' and expected.bounds!=common.bounds:
+                            mw=self.max_width_expr(common,expected)
+                            common=Type(signed=common.signed,bounds=(Expr('binary','-',[mw,Expr('literal','1')]),Expr('literal','0')))
                     else:
                         width=max(wx,wy)
                         if expected and expected.bounds and t.kind!='boolean':
                             ew=self.bits(expected)
-                            if ew is None: raise ParseError('symbolic arithmetic destination width needs explicit sizing')
-                            width=max(width,ew)
-                        common=Type(signed=left.signed and right.signed,bounds=(Expr('literal',str(width-1)),Expr('literal','0')))
+                            if ew is None:
+                                mw=self.max_width_expr(Type(bounds=(Expr('literal',str(width-1)),Expr('literal','0'))),expected)
+                                common=Type(signed=left.signed and right.signed,bounds=(Expr('binary','-',[mw,Expr('literal','1')]),Expr('literal','0')))
+                            else:
+                                width=max(width,ew)
+                                common=Type(signed=left.signed and right.signed,bounds=(Expr('literal',str(width-1)),Expr('literal','0')))
+                        else:
+                            common=Type(signed=left.signed and right.signed,bounds=(Expr('literal',str(width-1)),Expr('literal','0')))
                     s='('+self.numeric_arg(a[0],common)+' '+op+' '+self.numeric_arg(a[1],common)+')'
                     if t.kind!='boolean':
                         s=('signed' if common.signed else 'unsigned')+'(resize(unsigned('+s+'), '+self.width(common)+'))'
@@ -275,8 +376,7 @@ class VHDLGenerator:
             if expected.kind=='bits' and t.kind=='boolean': return 'hdl_bit('+s+')' if not expected.bounds else 'to_unsigned(boolean\'pos('+s+'), '+self.width(expected)+')'
             if expected.bounds:
                 if t.kind=='integer':
-                    value='to_signed('+s+', '+self.width(expected)+')'
-                    return value if expected.signed else 'unsigned('+value+')'
+                    return self.int_to_vector(e,s,expected.signed,self.width(expected))
                 if len(v)==2 and k=='literal': return s
                 if not t.bounds:
                     return ('signed' if expected.signed else 'unsigned')+"(resize(unsigned'(0 => "+s+'), '+self.width(expected)+'))'
@@ -285,7 +385,14 @@ class VHDLGenerator:
                 # for narrowing with a statically known smaller destination.
                 if t.bounds!=expected.bounds:
                     s=('hdl_resize' if t.signed else 'resize')+'('+s+', '+self.width(expected)+')'
-                return ('signed' if expected.signed else 'unsigned')+'('+s+')'
+                cast='signed' if expected.signed else 'unsigned'
+                if s.startswith(cast+'(') and s.endswith(')'):
+                    depth=0; enclosed=True
+                    for idx,ch in enumerate(s[len(cast):]):
+                        depth+=(ch=='(')-(ch==')')
+                        if depth==0 and idx!=len(s)-len(cast)-1: enclosed=False; break
+                    if enclosed: return s
+                return cast+'('+s+')'
             if expected.kind=='integer' and t.bounds: return 'to_integer('+s+')'
             if not expected.bounds and expected.kind=='bits' and t.kind=='integer':
                 try: return "'"+str(literal_int(e)&1)+"'"
@@ -304,9 +411,19 @@ class VHDLGenerator:
                 if node.kind=='instance' and node.data['module'] in by_name:visit(by_name[node.data['module']])
             visiting.remove(module.name);visited.add(module.name);ordered.append(module)
         for module in design.modules:visit(module)
+        def has_call(e,name):
+            if e is None:return False
+            return (e.kind=='call' and e.value==name) or any(has_call(a,name) for a in e.args)
+        def decl_uses(decls,name):
+            for d in decls:
+                if has_call(d.value,name):return True
+                if d.type.bounds and any(has_call(b,name) for b in d.type.bounds):return True
+                if any(has_call(b,name) for pair in d.type.dimensions for b in pair):return True
+            return False
+        clog2_impl="function hdl_clog2(n : natural) return natural is variable v : natural := n; variable r : natural := 0; begin if v <= 1 then return 0; end if; v := v - 1; while v > 0 loop v := v / 2; r := r + 1; end loop; return r; end;"
         for m in ordered:
             self.source_line=m.line
-            self.symbols={d.name:d.type for d in m.parameters+m.ports+m.declarations}
+            self.symbols={d.name:self.effective_type(d) for d in m.parameters+m.ports+m.declarations}
             self.function_types={fn['name']:fn for fn in m.functions}
             self.array_types={}
             for d in m.declarations:
@@ -316,23 +433,36 @@ class VHDLGenerator:
             for _,(t,values) in m.enums.items():
                 for n,_ in values: self.symbols[n]=t
             self.variables=set();self.aliases={};self.loop_id=0
-            out+=['library ieee;','use ieee.std_logic_1164.all;','use ieee.numeric_std.all;','', 'entity '+self.name(m.name)+' is']
+            entity_clog2=decl_uses(m.parameters+m.ports,'$clog2')
+            if entity_clog2:
+                pkg=self.name(m.name+'_hdl_pkg')
+                out+=['package '+pkg+' is',
+                      '    function hdl_clog2(n : natural) return natural;',
+                      'end package;',
+                      'package body '+pkg+' is',
+                      '    '+clog2_impl,
+                      'end package body;','']
+            out+=['library ieee;','use ieee.std_logic_1164.all;','use ieee.numeric_std.all;']
+            if entity_clog2:out+=['use work.'+self.name(m.name+'_hdl_pkg')+'.all;']
+            out+=['', 'entity '+self.name(m.name)+' is']
             params=[]
             for d in m.parameters:
                 self.source_line=d.line
                 typ=d.type
-                params.append(self.name(d.name)+' : '+self.typ(typ)+' := '+self.expr(d.value,typ))
+                if typ.kind=='integer' and not typ.signed and d.value is not None:
+                    try: val=literal_int(d.value)
+                    except ValueError: val=None
+                    if val is not None and not 0<=val<=2147483647:
+                        raise ParseError('unsigned integer parameter outside 31-bit VHDL natural range')
+                params.append(self.name(d.name)+' : '+self.typ(typ,is_param=True)+' := '+self.expr(d.value,typ))
             if params: out+=self.indent(['generic (']+self.indent([';\n        '.join(params)])+[');'])
             ports=[]
             for d in m.ports:
                 self.source_line=d.line
-                ports.append(self.name(d.name)+' : '+{'input':'in','output':'out','inout':'inout'}[d.direction]+' '+self.typ(d.type))
+                ports.append(self.name(d.name)+' : '+{'input':'in','output':'out','inout':'inout'}[d.direction]+' '+self.typ(self.effective_type(d)))
             if ports: out+=self.indent(['port (']+self.indent([';\n        '.join(ports)])+[');'])
             out+=['end entity;','', 'architecture rtl of '+self.name(m.name)+' is']
-            for name,typ in self.array_types.values():
-                ranges=', '.join(self.integer(l)+' '+self.direction((l,r))+' '+self.integer(r) for l,r in typ.dimensions)
-                out+=self.indent(['type '+self.name(name)+' is array ('+ranges+') of '+self.typ(replace(typ,dimensions=[]))+';'])
-            out+=self.indent([
+            helpers=[
                 "function hdl_lsb(v : unsigned) return std_logic is begin return v(v'right); end;",
                 "function hdl_resize(v : signed; n : positive) return signed is begin if n < v'length then return signed(resize(unsigned(v),n)); else return resize(v,n); end if; end;",
                 "function hdl_repeat(v : unsigned; n : positive) return unsigned is variable r : unsigned(v'length*n-1 downto 0); begin for i in 0 to n-1 loop r((i+1)*v'length-1 downto i*v'length) := v; end loop; return r; end;",
@@ -340,15 +470,33 @@ class VHDLGenerator:
                 'function hdl_mux(c : boolean; a,b : unsigned) return unsigned is begin if c then return a; else return b; end if; end;',
                 'function hdl_mux(c : boolean; a,b : signed) return signed is begin if c then return a; else return b; end if; end;',
                 'function hdl_mux(c : boolean; a,b : std_logic) return std_logic is begin if c then return a; else return b; end if; end;',
-                'function hdl_mux(c : boolean; a,b : integer) return integer is begin if c then return a; else return b; end if; end;'])
-            out+=self.indent(["function hdl_extract(v : unsigned; high,low : natural) return unsigned is variable normalized : unsigned(v'length-1 downto 0) := v; begin return normalized(high downto low); end;"])
+                'function hdl_mux(c : boolean; a,b : integer) return integer is begin if c then return a; else return b; end if; end;',
+                'function hdl_max(a,b : integer) return integer is begin if a > b then return a; else return b; end if; end;',
+                "function hdl_extract(v : unsigned; high,low : natural) return unsigned is variable normalized : unsigned(v'length-1 downto 0) := v; begin return normalized(high downto low); end;"]
+            if not entity_clog2:helpers.append(clog2_impl)
+            out+=self.indent(helpers)
             for _,(t,values) in m.enums.items():
-                out+=self.indent(['constant '+self.name(n)+' : '+self.typ(t)+' := '+self.expr(v,t)+';' for n,v in values])
-            for d in m.declarations:
+                out+=self.indent(['constant '+self.name(n)+' : '+self.typ(t,is_param=True)+' := '+self.expr(v,t)+';' for n,v in values])
+            non_array_consts=[d for d in m.declarations if d.kind in ('parameter','localparam') and not d.type.dimensions]
+            other_decls=[d for d in m.declarations if not (d.kind in ('parameter','localparam') and not d.type.dimensions)]
+            for d in non_array_consts:
+                self.source_line=d.line
+                if d.type.kind=='integer' and not d.type.signed and d.value is not None:
+                    try: val=literal_int(d.value)
+                    except ValueError: val=None
+                    if val is not None and not 0<=val<=2147483647:
+                        raise ParseError('unsigned integer parameter outside 31-bit VHDL natural range')
+                value=' := '+self.expr(d.value,d.type) if d.value else ''
+                out+=self.indent(['constant '+self.name(d.name)+' : '+self.typ(d.type,is_param=True)+value+';'])
+            for name,typ in self.array_types.values():
+                ranges=', '.join(self.integer(l)+' '+self.direction((l,r))+' '+self.integer(r) for l,r in typ.dimensions)
+                out+=self.indent(['type '+self.name(name)+' is array ('+ranges+') of '+self.typ(replace(typ,dimensions=[]))+';'])
+            for d in other_decls:
                 self.source_line=d.line
                 prefix='constant' if d.kind in ('parameter','localparam') else 'signal'
-                value=' := '+self.expr(d.value,d.type) if d.value else ''
-                out+=self.indent([prefix+' '+self.name(d.name)+' : '+self.typ(d.type)+value+';'])
+                eff=self.effective_type(d)
+                value=' := '+self.expr(d.value,eff) if d.value else ''
+                out+=self.indent([prefix+' '+self.name(d.name)+' : '+self.typ(eff,is_param=prefix=='constant')+value+';'])
             for fn in m.functions:
                 out+=self.indent(self.function(fn))
             if any(p.value for p in m.ports): raise ParseError('initialized SV port requires explicit intermediate signal')
@@ -410,6 +558,51 @@ class VHDLGenerator:
             return assigned
         assigned=visit(fn['body'],set())
         if not any(n.kind=='return' for n in walk(fn['body'])):read(Expr('name',fn['name']),assigned)
+    def plan_concat_target(self,target):
+        leaves=[]
+        def flatten(expression):
+            if expression.kind=='concat':
+                for child in expression.args:flatten(child)
+            elif expression.kind=='name':leaves.append(expression)
+            else:raise ParseError('concatenated assignment target requires whole declared signals')
+        flatten(target)
+        if len({leaf.value for leaf in leaves})!=len(leaves):
+            raise ParseError('duplicate signal in concatenated assignment target')
+        types=[self.etype(leaf) for leaf in leaves]
+        widths=[self.bits(typ) for typ in types]
+        if not leaves or any(typ.kind!='bits' or typ.dimensions for typ in types) or any(width is None or not 1<=width<=65536 for width in widths):
+            raise ParseError('concatenated assignment target requires fixed-width packed signals')
+        total=sum(widths)
+        if total>65536:raise ParseError('concatenated assignment width outside supported bounds')
+        return leaves,types,widths,total
+    def casez_literal(self,e,expected):
+        exp_w=self.bits(expected)
+        if exp_w is None:raise ParseError('casez with wildcard requires fixed-width selector')
+        raw=e.value.replace('_','')
+        if raw.isdigit():
+            bits=format(int(raw),'b').zfill(exp_w)[-exp_w:]
+            return ("'"+bits[-1]+"'") if not expected.bounds else '"'+bits+'"'
+        m=re.fullmatch(r"(\d+)?'[sS]?([bBoOdDhH])([0-9a-fA-F_xXzZ?]+)",e.value)
+        if not m:raise ParseError('unsupported casez literal '+e.value)
+        digits=m[3].replace('_',''); base=m[2].lower()
+        if 'x' in digits.lower():raise ParseError('casez choice with X cannot be lowered to VHDL case?')
+        size=int(m[1] or 32)
+        if base=='d':
+            if '?' in digits or 'z' in digits.lower():raise ParseError('decimal wildcard literal unsupported')
+            bits=format(int(digits),'b').zfill(size)[-size:]
+        else:
+            per={'b':1,'o':3,'h':4}[base]; bits=''
+            for c in digits:
+                bits+='-'*per if c.lower() in 'z?' else format(int(c,{'b':2,'o':8,'h':16}[base]),f'0{per}b')
+            padding='-' if bits and bits[0]=='-' else '0'
+            bits=(padding*max(0,size-len(bits))+bits)[-size:]
+        if len(bits)<exp_w:
+            pad='-' if bits and bits[0]=='-' else '0'
+            bits=pad*(exp_w-len(bits))+bits
+        elif len(bits)>exp_w:
+            bits=bits[-exp_w:]
+        if not expected.bounds:return "'"+bits[-1]+"'"
+        return '"'+bits+'"'
     def statements(self,nodes,context='concurrent'):
         out=[]
         for n in nodes:
@@ -417,33 +610,32 @@ class VHDLGenerator:
             d=n.data;k=n.kind
             if k=='assignment':
                 if d['target'].kind=='concat':
-                    if not d['concurrent'] or context!='concurrent':
+                    leaves,types,widths,total=self.plan_concat_target(d['target'])
+                    if d['concurrent'] and context=='concurrent':
+                        def function_calls(expression):
+                            return expression.kind=='call' and expression.value in self.function_types or any(function_calls(child) for child in expression.args)
+                        if function_calls(d['value']):raise ParseError('concatenated assignment with user function requires single-evaluation lowering')
+                        value=self.expr(d['value'],Type(bounds=(Expr('literal',str(total-1)),Expr('literal','0'))))
+                        offset=total
+                        for leaf,typ,width in zip(leaves,types,widths):
+                            offset-=width
+                            piece=f'hdl_extract({value}, {offset+width-1}, {offset})'
+                            piece='signed('+piece+')' if typ.signed else piece if typ.bounds else 'hdl_lsb('+piece+')'
+                            out.append(self.expr(leaf)+' <= '+piece+';')
+                        continue
+                    tmp_info=getattr(self,'concat_temps',{}).get(id(n))
+                    if context!='process' or tmp_info is None:
                         raise ParseError('procedural concatenated assignment target requires atomic scheduling lowering')
-                    leaves=[]
-                    def flatten(expression):
-                        if expression.kind=='concat':
-                            for child in expression.args:flatten(child)
-                        elif expression.kind=='name':leaves.append(expression)
-                        else:raise ParseError('concatenated assignment target requires whole declared signals')
-                    flatten(d['target'])
-                    if len({leaf.value for leaf in leaves})!=len(leaves):
-                        raise ParseError('duplicate signal in concatenated assignment target')
-                    types=[self.etype(leaf) for leaf in leaves]
-                    widths=[self.bits(typ) for typ in types]
-                    if not leaves or any(typ.kind!='bits' or typ.dimensions for typ in types) or any(width is None or not 1<=width<=65536 for width in widths):
-                        raise ParseError('concatenated assignment target requires fixed-width packed signals')
-                    def function_calls(expression):
-                        return expression.kind=='call' and expression.value in self.function_types or any(function_calls(child) for child in expression.args)
-                    if function_calls(d['value']):raise ParseError('concatenated assignment with user function requires single-evaluation lowering')
-                    total=sum(widths)
-                    if total>65536:raise ParseError('concatenated assignment width outside supported bounds')
+                    tmp_name,_=tmp_info
                     value=self.expr(d['value'],Type(bounds=(Expr('literal',str(total-1)),Expr('literal','0'))))
+                    out.append(self.name(tmp_name)+' := '+value+';')
                     offset=total
                     for leaf,typ,width in zip(leaves,types,widths):
                         offset-=width
-                        piece=f'hdl_extract({value}, {offset+width-1}, {offset})'
+                        op=':=' if leaf.value in self.variables else '<='
+                        piece=f'hdl_extract({self.name(tmp_name)}, {offset+width-1}, {offset})'
                         piece='signed('+piece+')' if typ.signed else piece if typ.bounds else 'hdl_lsb('+piece+')'
-                        out.append(self.expr(leaf)+' <= '+piece+';')
+                        out.append(self.expr(leaf)+' '+op+' '+piece+';')
                     continue
                 name=root_name(d['target']); target_type=self.etype(d['target'])
                 op=':=' if name in self.variables else '<='
@@ -451,20 +643,30 @@ class VHDLGenerator:
             elif k=='block': out+=self.statements(n.body,context)
             elif k=='process':
                 if d['flavor']=='always_latch': raise ParseError('always_latch requires explicit latch validation')
-                assigned=[s for s in walk(n.body) if s.kind=='assignment']; blocking={root_name(s.data['target']) for s in assigned if s.data['op']=='='}
-                if any(s.data['target'].kind=='concat' for s in assigned):raise ParseError('procedural concatenated assignment target requires atomic scheduling lowering')
-                nonblocking={root_name(s.data['target']) for s in assigned if s.data['op']=='<='}
+                assigned=[s for s in walk(n.body) if s.kind=='assignment']
+                blocking={name for s in assigned if s.data['op']=='=' for name in target_names(s.data['target'])}
+                nonblocking={name for s in assigned if s.data['op']=='<=' for name in target_names(s.data['target'])}
                 if blocking & nonblocking: raise ParseError('mixed assignment scheduling to same signal')
                 local_decls=[v for x in walk(n.body) if x.kind=='declaration' for v in x.data['declarations']]
                 previous=self.symbols.copy()
-                self.symbols.update({v.name:v.type for v in local_decls})
+                self.symbols.update({v.name:self.effective_type(v) for v in local_decls})
                 locals_={v.name for v in local_decls}
                 blocking-=locals_
                 self.variables=blocking|locals_
                 self.aliases={name:'hdl_var_'+name for name in blocking}
                 if any(alias in self.symbols for alias in self.aliases.values()): raise ParseError('generated variable name collision')
                 declarations=['variable '+self.name(self.aliases[name])+' : '+self.typ(self.symbols[name])+';' for name in sorted(blocking)]
-                declarations+=['variable '+self.name(v.name)+' : '+self.typ(v.type)+(' := '+self.expr(v.value,v.type) if v.value else '')+';' for v in local_decls]
+                declarations+=['variable '+self.name(v.name)+' : '+self.typ(self.effective_type(v))+(' := '+self.expr(v.value,self.effective_type(v)) if v.value else '')+';' for v in local_decls]
+                concat_temps={}
+                for s in assigned:
+                    if s.data['target'].kind=='concat':
+                        _,_,_,total=self.plan_concat_target(s.data['target'])
+                        tmp_name='hdl_concat_'+str(len(concat_temps))
+                        if tmp_name in self.symbols:raise ParseError('generated concat variable name collision')
+                        concat_temps[id(s)]=(tmp_name,total)
+                        declarations.append('variable '+self.name(tmp_name)+' : unsigned('+str(total-1)+' downto 0);')
+                prev_concat=getattr(self,'concat_temps',{})
+                self.concat_temps=concat_temps
                 seeds=[self.name(self.aliases[name])+' := '+self.name(name)+';' for name in sorted(blocking)]
                 commits=[self.name(name)+' <= '+self.name(self.aliases[name])+';' for name in sorted(blocking)]
                 events=d['events']; sensitivity=', '.join(self.name(name) for _,name in events) if events else 'all'
@@ -488,9 +690,10 @@ class VHDLGenerator:
                     else: raise ParseError('unrecognized reset condition')
                     if (polarity,reset_name) not in events: raise ParseError('reset condition and sensitivity mismatch')
                     edge,clock=next((e,c) for e,c in events if c!=reset_name)
-                    body=['if '+self.boolean(cond)+' then']+self.indent(self.statements(reset.body,'process'))+['elsif '+('rising_edge' if edge=='posedge' else 'falling_edge')+'('+self.name(clock)+') then']+self.indent(self.statements(reset.data['otherwise'],'process'))+['end if;']
+                    rst_cond='('+self.name(self.aliases.get(reset_name,reset_name))+" = '"+('1' if polarity=='posedge' else '0')+"')"
+                    body=['if '+rst_cond+' then']+self.indent(self.statements(reset.body,'process'))+['elsif '+('rising_edge' if edge=='posedge' else 'falling_edge')+'('+self.name(clock)+') then']+self.indent(self.statements(reset.data['otherwise'],'process'))+['end if;']
                 out+=['process('+sensitivity+')']+self.indent(declarations)+['begin']+self.indent(seeds+body+commits)+['end process;']
-                self.variables=set(); self.aliases={}
+                self.variables=set(); self.aliases={}; self.concat_temps=prev_concat
                 self.symbols=previous
             elif k=='if':
                 self.loop_id+=1; gen=d.get('generate')
@@ -498,12 +701,23 @@ class VHDLGenerator:
                 if d['otherwise']: out+=['else'+(' generate' if gen else '')]+self.indent(self.statements(d['otherwise'],context))
                 out+=['end generate;' if gen else 'end if;']
             elif k=='case':
+                case_kind=d.get('case_kind','case')
+                if case_kind=='casex': raise ParseError('casex has unsafe X-wildcard semantics and cannot be lowered to VHDL; use casez or case')
                 selector=d['expression'];typ=self.etype(selector)
-                out+=['case '+self.expr(selector)+' is']
-                for values,body in d['choices']:
-                    out+=self.indent(['when '+(' | '.join(self.expr(e,typ) for e in values) if values else 'others')+' =>']+self.indent(self.statements(body,context) or ['null;']))
-                if not any(not values for values,_ in d['choices']): out+=self.indent(['when others => null;'])
-                out+=['end case;']
+                if case_kind=='casez':
+                    if typ.kind!='bits' or typ.dimensions: raise ParseError('casez selector must be packed bits or scalar bit')
+                    out+=['case? '+self.expr(selector)+' is']
+                    for values,body in d['choices']:
+                        rendered=[self.casez_literal(e,typ) if e.kind=='literal' and (len(e.value)>2 or e.value.replace('_','').isdigit()) else self.expr(e,typ) for e in values]
+                        out+=self.indent(['when '+(' | '.join(rendered) if values else 'others')+' =>']+self.indent(self.statements(body,context) or ['null;']))
+                    if not any(not values for values,_ in d['choices']): out+=self.indent(['when others => null;'])
+                    out+=['end case?;']
+                else:
+                    out+=['case '+self.expr(selector)+' is']
+                    for values,body in d['choices']:
+                        out+=self.indent(['when '+(' | '.join(self.expr(e,typ) for e in values) if values else 'others')+' =>']+self.indent(self.statements(body,context) or ['null;']))
+                    if not any(not values for values,_ in d['choices']): out+=self.indent(['when others => null;'])
+                    out+=['end case;']
             elif k=='for':
                 name=d['name'];condition=d['condition'];update=d['update']
                 if condition.kind!='binary' or condition.args[0]!=Expr('name',name) or condition.value not in ('<','<=','>','>='): raise ParseError('unsupported loop condition')

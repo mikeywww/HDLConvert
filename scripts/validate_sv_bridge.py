@@ -43,7 +43,14 @@ def rename_module(text, replacement):
     return result
 
 
-def bench(random_cycles):
+def rename_vhdl_entity(text, replacement):
+    result, count = re.subn(r'\\aurora_packet_bridge\\', '\\\\' + replacement + '\\\\', text)
+    if count < 2:
+        raise ValueError('expected VHDL entity \\aurora_packet_bridge\\ in the input')
+    return result
+
+
+def bench(random_cycles, target_module='bridge_verilog', is_vhdl=False):
     declarations = '\n'.join(
         'wire ' + (f'[{width-1}:0] ' if width > 1 else '') + name + ' [0:1];'
         for name, width in OUTPUTS)
@@ -63,6 +70,15 @@ def bench(random_cycles):
         f'      if ({name}[0] !== {name}[1]) '
         f'$display("  {name}: native=%h converted=%h", {name}[0], {name}[1]);'
         for name, _ in OUTPUTS)
+    state_diag = (
+        '        $display("FAIL: cycle=%0d phase=%s native_state=%0d native=%h converted=%h",\n'
+        '                 cycles,phase,reference_dut.tx_state,\n'
+        '                 native_outputs,translated_outputs);'
+    ) if is_vhdl else (
+        '        $display("FAIL: cycle=%0d phase=%s states=%0d/%0d native=%h converted=%h",\n'
+        '                 cycles,phase,reference_dut.tx_state,translated_dut.tx_state,\n'
+        '                 native_outputs,translated_outputs);'
+    )
     head = f'''`timescale 1ns/1ps
 module tb_sv_bridge;
 reg user_clk=0, reset_n=1;
@@ -73,7 +89,7 @@ reg rx_packet_start=0, rx_frame_start=0, s_axi_tx_tready=0;
 reg [15:0] ram_rd_data[0:1];
 {declarations}
 {instance('bridge_native', 'reference_dut', 0)}
-{instance('bridge_verilog', 'translated_dut', 1)}
+{instance(target_module, 'translated_dut', 1)}
 wire [{sum(width for _, width in OUTPUTS)-1}:0] native_outputs={packed[0]};
 wire [{sum(width for _, width in OUTPUTS)-1}:0] translated_outputs={packed[1]};
 integer cycles=0, comparisons=0, beats=0, stalls=0;
@@ -108,11 +124,9 @@ task compare(input string phase);
 begin
     comparisons=comparisons+1;
     if (native_outputs !== translated_outputs) begin
-        $display("FAIL: cycle=%0d phase=%s states=%0d/%0d native=%h converted=%h",
-                 cycles,phase,reference_dut.tx_state,translated_dut.tx_state,
-                 native_outputs,translated_outputs);
+{state_diag}
 {differences}
-        $fatal(1,"FAIL: converted Verilog differs from original SystemVerilog");
+        $fatal(1,"FAIL: converted target differs from original SystemVerilog");
     end
 end
 endtask
@@ -274,8 +288,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path,
                         default=ROOT/'tests/sv/aurora_packet_bridge.sv')
-    parser.add_argument('--verilog', type=Path, required=True,
-                        help='already converted Verilog file; no conversion is repeated')
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--verilog', type=Path,
+                       help='already converted Verilog file; no conversion is repeated')
+    group.add_argument('--vhdl', type=Path,
+                       help='already converted VHDL file; mixed-language SV-vs-VHDL comparison')
     parser.add_argument('--vivado', type=Path,
                         default=Path('D:/APP/Xilinx/2025.2/Vivado'))
     parser.add_argument('--work', type=Path, default=ROOT/'build/sv-bridge-compare')
@@ -291,22 +308,28 @@ def main():
     folder.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(options.source.read_bytes()).hexdigest()
     original = read_source(options.source)
-    converted = read_source(options.verilog)
+    is_vhdl = options.vhdl is not None
+    target_path = options.vhdl if is_vhdl else options.verilog
+    converted = read_source(target_path)
     if 'No complete target design emitted.' in converted:
-        raise RuntimeError('Verilog input is an incomplete conversion draft')
+        raise RuntimeError('Target input is an incomplete conversion draft')
     (folder/'bridge_native.sv').write_text(rename_module(original, 'bridge_native'), encoding='utf-8')
-    (folder/'bridge_verilog.v').write_text(rename_module(converted, 'bridge_verilog'), encoding='utf-8')
-    (folder/'tb_sv_bridge.sv').write_text(bench(options.random_cycles), encoding='utf-8')
+    if is_vhdl:
+        (folder/'bridge_vhdl.vhd').write_text(rename_vhdl_entity(converted, 'bridge_vhdl'), encoding='utf-8')
+        (folder/'tb_sv_bridge.sv').write_text(bench(options.random_cycles, 'bridge_vhdl', is_vhdl=True), encoding='utf-8')
+    else:
+        (folder/'bridge_verilog.v').write_text(rename_module(converted, 'bridge_verilog'), encoding='utf-8')
+        (folder/'tb_sv_bridge.sv').write_text(bench(options.random_cycles), encoding='utf-8')
     (folder/'run.tcl').write_text('log_wave -recursive *\nrun all\nquit\n', encoding='utf-8')
     (folder/'inputs.txt').write_text(
         f'Source: {options.source.resolve()}\nSHA256: {digest}\n'
-        f'Verilog: {options.verilog.resolve()}\n'
+        f'Target: {target_path.resolve()}\n'
         f'Parameters: DATA_WIDTH=16 KEEP_WIDTH=2 PACKET_WORDS=3 '
         f'PACKETS_PER_FRAME=2 BANK_ADDR_WIDTH=3 RAM_ADDR_WIDTH=4\n'
         f'Random seed: 1badf00d; cycles: {options.random_cycles}\n', encoding='utf-8')
     commands = [
         ('xvlog', ['--sv', 'bridge_native.sv', 'tb_sv_bridge.sv']),
-        ('xvlog_target', ['bridge_verilog.v']),
+        ('xvhdl', ['-2008', 'bridge_vhdl.vhd']) if is_vhdl else ('xvlog_target', ['bridge_verilog.v']),
         ('xelab', ['work.tb_sv_bridge', '--timescale', '1ns/1ps',
                    '-s', 'sv_bridge_compare', '-debug', 'typical']),
         ('xsim', ['sv_bridge_compare', '-tclbatch', 'run.tcl',
@@ -333,7 +356,7 @@ def main():
                     print(line, flush=True)
     if hashlib.sha256(options.source.read_bytes()).hexdigest() != digest:
         raise RuntimeError('Source fixture changed during validation; inspect external writes')
-    print('PASS: original SV vs converted Verilog, all 19 outputs at both settled clock phases; '
+    print(f'PASS: original SV vs converted {"VHDL" if is_vhdl else "Verilog"}, all 19 outputs at both settled clock phases; '
           'directed packets, backpressure, keep/control/length/overflow errors and fixed-seed activity. '
           'Behavioral RAM only. Logs/waveform: ' + str(folder))
     return 0

@@ -33,6 +33,25 @@ class Expressions:
         return None
 
     def __call__(self, tokens):
+        value = self.raw(tokens)
+        # Keep the typed visitor's width/sign casts and metadata unchanged.
+        # Only its final SystemVerilog spelling is normalized through the
+        # shared expression tree; parentheses follow operator precedence,
+        # rather than textual substitutions. Imports are deferred so the
+        # legacy and language-neutral front ends do not depend on each other
+        # during module initialization.
+        from hdl.lex import expression, tokenize
+        from hdl.formatting import format_expression
+        try:
+            tree = expression(tokenize(value))
+        except ParseError:
+            # A previously supported spelling outside the shared expression
+            # parser (for example a qualified package name) remains intact.
+            return value
+        return format_expression(tree)
+
+    def raw(self, tokens):
+        """Internal typed spelling, before the final readability pass."""
         return self.typed(tokens)[0]
 
     def typed(self, tokens):
@@ -48,9 +67,9 @@ class Expressions:
             cond_len = len(rest[0])
             yes, meta = self.typed(parts[0])
             no, _ = self.typed(tokens[n+cond_len+2:])
-            return f'({self(rest[0])} ? {yes} : {no})', meta
+            return f'({self.raw(rest[0])} ? {yes} : {no})', meta
         if tokens[0].text == '(' and tokens[-1].text == ')' and len(tokens) >= 5 and tokens[1].lower == 'others' and tokens[2].text == '=>':
-            value = self(tokens[3:-1])
+            value = self.raw(tokens[3:-1])
             if value in ("1'b0", "1'b1", "'0", "'1"):
                 return "'" + value[-1], None
             raise ParseError('only uniform zero/one others aggregate supported')
@@ -149,8 +168,13 @@ class ExprParser:
             if symbol and symbol.type.vhdl=='fragment_external':
                 meta=('external',None)
             elif symbol and symbol.type.vector:
-                numeric_unsigned=symbol.type.vhdl.lower()=='unsigned' or self.conv.symbols.unsigned_arithmetic and symbol.type.vhdl.lower()=='std_logic_vector'
-                meta = ('signed' if symbol.type.signed else ('unsigned' if numeric_unsigned else 'bits'), f'$bits({value})')
+                vhdl_t = symbol.type.vhdl.lower()
+                if symbol.type.signed or (self.conv.symbols.signed_arithmetic and vhdl_t == 'std_logic_vector'):
+                    meta = ('signed', f'$bits({value})')
+                elif vhdl_t == 'unsigned' or (self.conv.symbols.unsigned_arithmetic and vhdl_t == 'std_logic_vector'):
+                    meta = ('unsigned', f'$bits({value})')
+                else:
+                    meta = ('bits', f'$bits({value})')
             if self.peek() == '(' and not (symbol and symbol.kind != 'function'):
                 args_raw = split(self.group())
                 typed_args = [self.conv.typed(a) for a in args_raw if a]
@@ -160,9 +184,30 @@ class ExprParser:
                     meta = ('bits' if n == 'std_logic_vector' else n, typed_args[0][1][1] if typed_args[0][1] else f'$bits({args[0]})')
                 elif n in ('to_integer', 'integer') and len(args) == 1:
                     value = f"int'({args[0]})"
-                elif n in ('to_unsigned', 'to_signed') and len(args) == 2:
-                    value = f"${'signed' if n == 'to_signed' else 'unsigned'}(({args[1]})'({args[0]}))"
-                    meta = (n[3:], args[1])
+                elif n == 'conv_integer' and len(args) == 1:
+                    arg_meta = typed_args[0][1]
+                    if arg_meta and arg_meta[0] == 'signed':
+                        value = f"int'($signed({args[0]}))"
+                    elif arg_meta and arg_meta[0] == 'unsigned':
+                        value = f"int'($unsigned({args[0]}))"
+                    elif arg_meta and arg_meta[0] == 'bits':
+                        if self.conv.symbols.signed_arithmetic:
+                            value = f"int'($signed({args[0]}))"
+                        elif self.conv.symbols.unsigned_arithmetic:
+                            value = f"int'($unsigned({args[0]}))"
+                        else:
+                            raise ParseError('conv_integer on std_logic_vector requires std_logic_unsigned/std_logic_signed or explicit signed/unsigned cast')
+                    else:
+                        value = f"int'({args[0]})"
+                elif n in ('to_unsigned', 'to_signed', 'conv_unsigned', 'conv_signed') and len(args) == 2:
+                    is_signed = n in ('to_signed', 'conv_signed')
+                    value = f"${'signed' if is_signed else 'unsigned'}(({args[1]})'({args[0]}))"
+                    meta = ('signed' if is_signed else 'unsigned', args[1])
+                elif n == 'conv_std_logic_vector' and len(args) == 2:
+                    arg_meta = typed_args[0][1]
+                    is_signed = self.conv.symbols.signed_arithmetic or bool(arg_meta and arg_meta[0] == 'signed')
+                    value = f"${'signed' if is_signed else 'unsigned'}(({args[1]})'({args[0]}))"
+                    meta = ('signed' if is_signed else 'unsigned', args[1])
                 elif n in ('shift_left','shift_right') and len(args)==2:
                     kind=self.conv.numeric_kind(args_raw[0])
                     if not kind and typed_args[0][1] and typed_args[0][1][0] in ('signed','unsigned'):
@@ -207,11 +252,11 @@ class ExprParser:
                     for direction in ('to', 'downto'):
                         parts = split(arg, direction)
                         if len(parts) == 2:
-                            bounds = f'{self.conv(parts[0])}:{self.conv(parts[1])}'
-                            left, right = self.conv(parts[0]), self.conv(parts[1])
+                            bounds = f'{self.conv.raw(parts[0])}:{self.conv.raw(parts[1])}'
+                            left, right = self.conv.raw(parts[0]), self.conv.raw(parts[1])
                             width = f'(({left})-({right})+1)' if direction == 'downto' else f'(({right})-({left})+1)'
                             meta = (meta[0] if meta else 'bits', width)
-                    value += '[' + (bounds if bounds else self.conv(arg)) + ']'
+                    value += '[' + (bounds if bounds else self.conv.raw(arg)) + ']'
                     if not bounds:
                         if symbol and symbol.type.ranges and symbol.type.element and symbol.type.element.vector:
                             elem = symbol.type.element
@@ -231,7 +276,7 @@ class ExprParser:
                     raise ParseError(f'unsupported attribute {attr}')
                 if symbol.type.ranges:
                     r = symbol.type.ranges[0]
-                    left, right = self.conv(r.left), self.conv(r.right)
+                    left, right = self.conv.raw(r.left), self.conv.raw(r.right)
                     value = {'left': left, 'right': right,
                              'high': left if r.direction == 'downto' else right,
                              'low': right if r.direction == 'downto' else left,

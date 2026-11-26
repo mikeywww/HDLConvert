@@ -4,6 +4,8 @@ from dataclasses import replace
 import re
 from .ir import Expr, Type, Statement, Declaration
 from .lex import literal_int
+from .fills import fill_literal, repeated_bit_literal
+from .formatting import operand, cast_size, unary_text
 from hdlconvert.lexer import ParseError
 from hdlconvert.comments import decorate, closing, interface, lines as comment_lines
 
@@ -21,7 +23,7 @@ def walk(nodes):
 
 
 def root_name(e):
-    while e.kind in ('index','slice','field'): e=e.args[0]
+    while e.kind in ('index','slice','part_select','field'): e=e.args[0]
     return e.value if e.kind=='name' else ''
 
 
@@ -34,6 +36,63 @@ def target_names(expression):
         return {name for child in expression.args for name in target_names(child)}
     name=root_name(expression)
     return {name} if name else set()
+
+
+def target_claims(expression):
+    """Extract (root, static_region_or_None, field_tuple) for driver checks."""
+    if expression.kind=='concat':
+        out=[]
+        for child in expression.args: out.extend(target_claims(child))
+        return out
+    region=None; fields=[]; cur=expression
+    if cur.kind=='index':
+        try: idx=literal_int(cur.args[1]); region=(idx,idx)
+        except ValueError: pass
+        cur=cur.args[0]
+    elif cur.kind=='slice':
+        try: a,b=literal_int(cur.args[1]),literal_int(cur.args[2]); region=(min(a,b),max(a,b))
+        except ValueError: pass
+        cur=cur.args[0]
+    elif cur.kind=='part_select':
+        try:
+            base,w=literal_int(cur.args[1]),literal_int(cur.args[2])
+            if w>0:
+                region=(base,base+w-1) if cur.value=='+:' else (base-w+1,base)
+        except ValueError: pass
+        cur=cur.args[0]
+    while cur.kind in ('field','index','slice','part_select'):
+        if cur.kind=='field': fields.append(cur.value)
+        else: region=None
+        cur=cur.args[0]
+    if cur.kind=='name' and cur.value:
+        return [(cur.value,region,tuple(reversed(fields)))]
+    return []
+
+
+def check_process_drivers(statements):
+    """Allow multiple processes on one signal only for proved disjoint slices/fields."""
+    claims=defaultdict(list)
+    owners=defaultdict(set); procedural=set(); continuous=set()
+    for n in walk(statements):
+        if n.kind=='process':
+            oid=id(n)
+            for s in walk(n.body):
+                if s.kind!='assignment': continue
+                for name,region,field in target_claims(s.data['target']):
+                    owners[name].add(oid); procedural.add(name)
+                    for prev_id,prev_reg,prev_field in claims[name]:
+                        if prev_id==oid: continue
+                        if field and prev_field and any(a!=b for a,b in zip(field,prev_field)): continue
+                        if region and prev_reg and (region[1]<prev_reg[0] or prev_reg[1]<region[0]): continue
+                        raise ParseError('multiple procedural drivers require manual ownership review')
+                    claims[name].append((oid,region,field))
+        elif n.kind=='assignment' and n.data['concurrent']:
+            continuous.update(target_names(n.data['target']))
+        elif n.kind=='initial':
+            procedural.update(targets(n.body))
+    if procedural & continuous:
+        raise ParseError('mixed continuous and procedural drivers: '+', '.join(sorted(procedural & continuous)))
+    return owners, procedural, continuous
 
 
 def validate_case_qualifiers(module):
@@ -109,26 +168,34 @@ def sv_expr(e, target='systemverilog', width=None, cast=None):
     k,a,v=e.kind,e.args,e.value
     if k in ('name','literal'):
         if k=='literal' and len(v)==2 and v[0]=="'" and target=='verilog':
-            if width is None: raise ParseError('unbased unsized literal requires known destination width for Verilog')
-            if v[1]=='0' and str(width).isdigit():return str(width)+"'b0"
-            return '{'+width+"{1'b"+v[1]+'}}'
+            filled=fill_literal(v[1],target,width)
+            if filled is None:raise ParseError('unbased unsized literal requires known destination width for Verilog')
+            return filled
         return v + (' ' if k=='name' and v.startswith('\\') else '')
     if k=='cast':
-        if target=='systemverilog': return (render(a[0]) if a[0]==Expr('name','int') else '('+render(a[0])+')')+"'("+render(a[1])+')'
+        if target=='systemverilog': return cast_size(render(a[0]),a[0].kind)+"'("+render(a[1])+')'
         if cast is None: raise ParseError('cast lowering requires module context')
         return cast(e)
-    if k=='binary': return '('+render(a[0])+' '+v+' '+render(a[1])+')'
-    if k=='unary': return '('+v+render(a[0])+')'
-    if k=='conditional': return '('+render(a[0])+' ? '+sv_expr(a[1],target,width,cast)+' : '+sv_expr(a[2],target,width,cast)+')'
-    if k=='concat': return '{'+', '.join(map(render,a))+'}'
+    if k=='binary': return operand(a[0],render(a[0]),k,v,'left')+' '+v+' '+operand(a[1],render(a[1]),k,v,'right')
+    if k=='unary': return unary_text(v,render(a[0]),a[0])
+    if k=='conditional': return operand(a[0],render(a[0]),k,side='condition')+' ? '+sv_expr(a[1],target,width,cast)+' : '+sv_expr(a[2],target,width,cast)
+    if k=='concat':
+        # A direct unbased bit in a concat is self-determined at one bit.
+        item=lambda x: sv_expr(x,target,'1' if x.kind=='literal' and len(x.value)==2 and x.value[0]=="'" else None,cast)
+        return '{'+', '.join(map(item,a))+'}'
     if k=='repeat':
         size=zero_width(e)
         if size is not None:return str(size)+"'b0"
+        compact=repeated_bit_literal(e)
+        if compact is not None:return compact
         return '{'+render(a[0])+'{'+', '.join(map(render,a[1].args))+'}}'
-    if k=='index': return render(a[0])+'['+render(a[1])+']'
-    if k=='slice': return render(a[0])+'['+render(a[1])+':'+render(a[2])+']'
-    if k=='field': return render(a[0])+'.'+v
+    if k=='index': return operand(a[0],render(a[0]),k,side='base')+'['+operand(a[1],render(a[1]),k,side='bound')+']'
+    if k=='slice': return operand(a[0],render(a[0]),k,side='base')+'['+':'.join(operand(item,render(item),k,side='bound') for item in a[1:])+']'
+    if k=='part_select': return operand(a[0],render(a[0]),k,side='base')+'['+operand(a[1],render(a[1]),k,side='bound')+' '+v+' '+operand(a[2],render(a[2]),k,side='bound')+']'
+    if k=='field': return operand(a[0],render(a[0]),k,side='base')+'.'+v
     if k=='call':
+        if v=='$unsigned' and target=='verilog' and cast is not None:
+            return cast(e)
         if v=='$bits' and target=='verilog':
             if cast is None: raise ParseError('$bits requires symbol metadata')
             return cast(e)
@@ -146,14 +213,27 @@ def width_of(t):
         l,r=t.bounds
         try: return str(abs(literal_int(l)-literal_int(r))+1)
         except (ValueError,ZeroDivisionError):
-            a,b=sv_expr(l),sv_expr(r)
-            return f'(({a}) >= ({b}) ? ({a})-({b})+1 : ({b})-({a})+1)'
+            difference=lambda a,b:Expr('binary','+',[Expr('binary','-',[a,b]),Expr('literal','1')])
+            # This string also substitutes the atomic $bits(...) call during
+            # Verilog lowering, so its compound expression needs one group.
+            return '('+sv_expr(Expr('conditional',args=[Expr('binary','>=',[l,r]),difference(l,r),difference(r,l)]))+')'
     return '1'
+
+
+def fixed_cast_width(e):
+    """Evaluate literal-only size expressions without fixing generic overrides."""
+    if e==Expr('name','int'):return 32
+    if e.kind=='conditional':
+        condition,yes,no=e.args
+        if condition.kind=='binary' and condition.value in ('>','>=','<','<=','==','!='):
+            a,b=map(literal_int,condition.args)
+            selected={'>':a>b,'>=':a>=b,'<':a<b,'<=':a<=b,'==':a==b,'!=':a!=b}[condition.value]
+            return fixed_cast_width(yes if selected else no)
+    return literal_int(e)
 
 
 class VerilogGenerator:
     def __init__(self,target='systemverilog'): self.target=target
-    def expr(self,e,width=None): return sv_expr(e,self.target,width,self.cast)
     def signed(self,e):
         if e.kind=='name': return self.symbols.get(e.value,Type()).signed
         if e.kind=='literal': return "'s" in e.value.lower() or e.value.replace('_','').isdigit()
@@ -163,6 +243,17 @@ class VerilogGenerator:
         if e.kind=='cast': return e.args[0]==Expr('name','int') or self.signed(e.args[1])
         return False
     def cast(self,e):
+        if e.kind=='call' and e.value=='$unsigned':
+            if len(e.args)!=1:raise ParseError('$unsigned requires one expression')
+            source=e.args[0]
+            if source.kind=='cast':
+                if not self.signed(source):return self.cast(source)
+                if source.args[1].kind=='literal':
+                    try:
+                        size=fixed_cast_width(source.args[0]);value=literal_int(source.args[1])
+                        if 1<=size<=65536:return f"{size}'d{value % (1 << size)}"
+                    except (ValueError,ZeroDivisionError):pass
+            return '$unsigned('+self.expr(source)+')'
         if e.kind=='call' and e.value in self.function_names:
             return e.value+'('+', '.join(self.expr(a) for a in e.args)+')'
         if e.kind=='call' and e.value!='$bits':raise ParseError('unknown function '+e.value)
@@ -175,10 +266,41 @@ class VerilogGenerator:
             return width
         width='32' if e.args[0]==Expr('name','int') else self.expr(e.args[0])
         try:
-            n=literal_int(e.args[0])
+            n=fixed_cast_width(e.args[0])
             if not 1<=n<=65536: raise ParseError('cast width outside supported bounds')
+            width=str(n)
         except ValueError:
             if e.args[0].kind not in ('name','binary','call','conditional'): raise ParseError('cast size must be a constant expression')
+        if width.isdigit() and self.self_determined_width(e.args[1])==int(width):
+            source=e.args[1]
+            if source.kind=='binary' and source.value in ('&','|','^') and not self.signed(source):
+                # Unsigned zero extension commutes with these bit operations.
+                # XNOR and arithmetic do not have this property.
+                return '('+self.expr(source)+')'
+            # A concat fences the native width, as a function return would.
+            # Do not expose a binary operand to its parent's sizing context.
+            result='{'+self.expr(e.args[1])+'}'
+            return '$signed('+result+')' if self.signed(e) else result
+        if width.isdigit():
+            size=int(width);source=e.args[1]
+            try:
+                literal_source=source
+                while literal_source.kind=='unary' and literal_source.value in ('+','-'):
+                    literal_source=literal_source.args[0]
+                if literal_source.kind!='literal':raise ValueError('not a literal cast')
+                value=literal_int(source)
+                # Exact bits, including truncation of negative constants.
+                result=f"{size}'d{value % (1 << size)}"
+                return '$signed('+result+')' if self.signed(e) else result
+            except (ValueError,ZeroDivisionError):pass
+            source_width=self.self_determined_width(source)
+            if source_width is not None and source_width<size and not self.signed(source):
+                # A concatenation supplies explicit zero extension without an
+                # identity function or changing the source expression's width.
+                while source.kind=='call' and source.value=='$unsigned' and len(source.args)==1:
+                    source=source.args[0]
+                result='{'+f"{size-source_width}'b0, "+self.expr(source)+'}'
+                return '$signed('+result+')' if self.signed(e) else result
         if width not in self.cast_helpers:
             name='hdl_cast_'+str(len(self.cast_helpers))
             if name in self.symbols: raise ParseError('generated cast helper name collision')
@@ -237,17 +359,10 @@ class VerilogGenerator:
                 m.statements=self.lower_comb_assignments(m.statements)
                 m.statements=self.lower_comb_cases(m.statements,m.functions)
                 self.function_names={fn['name'] for fn in m.functions}
-            owners=defaultdict(set); procedural=set(); continuous=set()
-            for n in walk(m.statements):
-                if n.kind=='process':
-                    for name in targets(n.body): owners[name].add(id(n)); procedural.add(name)
-                if n.kind=='assignment' and n.data['concurrent']: continuous.update(target_names(n.data['target']))
-                if n.kind=='initial':procedural.update(targets(n.body))
+            owners,procedural,continuous=check_process_drivers(m.statements)
             procedural.update(d.name for d in m.declarations if d.type.dimensions and d.value is not None)
             self.child_outputs={name for n in walk(m.statements) if n.kind=='instance' for name in n.data.get('output_targets',[])}
             self.owners=owners
-            if any(len(v)>1 for v in owners.values()): raise ParseError('multiple procedural drivers require manual ownership review')
-            if procedural & continuous: raise ParseError('mixed continuous and procedural drivers: '+', '.join(sorted(procedural & continuous)))
             if self.child_outputs & (procedural | continuous):raise ParseError('child output has an additional parent driver: '+', '.join(sorted(self.child_outputs & (procedural | continuous))))
             header='module '+m.name
             def names(e):
@@ -306,7 +421,8 @@ class VerilogGenerator:
                 self.symbols=old_symbols
             out+=self.indent(comment_lines(m.architecture_comments,'body')+comment_lines(m.architecture_comments,'body','inline')+self.statements(m.statements))
             for width,name in self.cast_helpers.items():
-                out+=self.indent([f'function [({width})-1:0] {name};', f'    input [({width})-1:0] value;', f'    begin {name} = value; end', 'endfunction'])
+                bounds=f'{int(width)-1}:0' if width.isdigit() else f'({width})-1:0'
+                out+=self.indent([f'function [{bounds}] {name};', f'    input [{bounds}] value;', f'    begin {name} = value; end', 'endfunction'])
             out+=decorate(['endmodule'],m.architecture_comments,'close')+['']
         return '\n'.join(out+design.comments_tail)+'\n'
     def lower_comb_assignments(self,nodes):
@@ -351,13 +467,25 @@ class VerilogGenerator:
                 if any(not v for v,_ in choices) and all(len(b)==1 and b[0].kind=='assignment' and b[0].data['op']=='=' for _,b in choices):
                     target=choices[0][1][0].data['target'];sel=case.data['expression']
                     if target.kind=='name' and sel.kind=='name' and all(b[0].data['target']==target for _,b in choices):
-                        typ=self.expr_type(target);name='hdl_select_'+str(len(functions))
+                        typ=self.expr_type(target);name=target.value+'_decode'
+                        if name in self.symbols or name in self.function_names:
+                            name='hdl_select_'+str(len(functions))
                         if name in self.symbols or name in self.function_names:raise ParseError('generated select helper collision')
-                        args=[Declaration('sel',self.expr_type(sel),'port','input')];actuals=[sel];branches=[]
+                        args=[Declaration(sel.value,self.expr_type(sel),'port','input')];actuals=[sel];branches=[]
+                        constants={d.name for d in self.module.parameters+self.module.declarations if d.kind in ('parameter','localparam')}
+                        constants.update(name for _,items in self.module.enums.values() for name,_ in items)
                         for i,(values,branch) in enumerate(choices):
-                            arg='value_'+str(i);args.append(Declaration(arg,typ,'port','input'));actuals.append(branch[0].data['value'])
-                            branches.append((values,[Statement('assignment',dict(target=Expr('name',name),value=Expr('name',arg),op='=',concurrent=False),comments=branch[0].comments)]))
-                        functions.append(dict(name=name,type=typ,args=args,locals=[],automatic=True,comments=n.comments,body=[Statement('case',dict(expression=Expr('name','sel'),choices=branches),comments=case.comments)]))
+                            value=branch[0].data['value']
+                            terms=list(self.expr_nodes(value))
+                            # Module constants and selector-only expressions
+                            # belong directly in the original case branches.
+                            direct=all(e.kind!='name' or e.value in constants or e.value==sel.value for e in terms)
+                            direct &= not any(e.kind=='call' and e.value not in ('$signed','$unsigned','$clog2','$bits') for e in terms)
+                            if not direct:
+                                arg='value_'+str(i);args.append(Declaration(arg,typ,'port','input'));actuals.append(value)
+                                value=Expr('name',arg)
+                            branches.append((values,[Statement('assignment',dict(target=Expr('name',name),value=value,op='=',concurrent=False),comments=branch[0].comments)]))
+                        functions.append(dict(name=name,type=typ,args=args,locals=[],automatic=True,comments=n.comments,body=[Statement('case',dict(expression=sel,choices=branches,case_kind=case.data.get('case_kind','case')),comments=case.comments)]))
                         result.append(Statement('assignment',dict(target=target,value=Expr('call',name,actuals),op='=',concurrent=True)))
                         continue
             result.append(n)
@@ -377,13 +505,55 @@ class VerilogGenerator:
         if e.kind=='field':
             typ=self.expr_type(e.args[0]);return typ.fields.get(e.value,(Type(),0,0))[0]
         if e.kind=='slice':return Type(bounds=tuple(e.args[1:]))
+        if e.kind=='part_select':return Type(bounds=(Expr('binary','-',[e.args[2],Expr('literal','1')]),Expr('literal','0')))
         return Type()
+    def self_determined_width(self,e):
+        """Narrow proof used only to remove exact-width identity casts."""
+        if e.kind=='cast':
+            try:return fixed_cast_width(e.args[0])
+            except (ValueError,ZeroDivisionError):return None
+        if e.kind in ('name','index','slice','part_select','field'):
+            typ=self.expr_type(e)
+            if typ.kind=='external' or typ.dimensions or (e.kind=='name' and e.value not in self.symbols):return None
+            width=width_of(typ)
+            return int(width) if width and width.isdigit() else None
+        if e.kind=='call' and e.value in ('$signed','$unsigned') and len(e.args)==1:
+            return self.self_determined_width(e.args[0])
+        if e.kind=='binary' and e.value in ('&','|','^','~^','^~'):
+            widths=[self.self_determined_width(a) for a in e.args]
+            return max(widths) if all(width is not None for width in widths) else None
+        return None
     def expr(self,e,width=None):
         if e is None:return ''
+        if self.target=='verilog' and e.kind=='call' and e.value=='$unsigned' and len(e.args)==1:
+            source=e.args[0]
+            if source.kind=='cast' and source.args[1].kind=='binary' and source.args[1].value in ('&','|','^') and not self.signed(source.args[1]):
+                try:size=fixed_cast_width(source.args[0])
+                except (ValueError,ZeroDivisionError):size=None
+                if size is not None and size==self.self_determined_width(source.args[1]):
+                    e=source.args[1]
+        if self.target=='verilog' and width is not None and str(width).isdigit():
+            # At an entire RHS, an equal-width destination supplies precisely
+            # the cast's sizing context. Sign reinterpretations outside that
+            # cast cannot affect extension because no bits are added here.
+            # Keep casts inside arithmetic/calls: they fence intermediate widths.
+            candidate=e
+            while candidate.kind=='call' and candidate.value in ('$signed','$unsigned') and len(candidate.args)==1:
+                candidate=candidate.args[0]
+            if candidate.kind=='cast':
+                try: size=fixed_cast_width(candidate.args[0])
+                except (ValueError,ZeroDivisionError):
+                    rendered_size=self.expr(candidate.args[0])
+                    size=int(rendered_size) if rendered_size.isdigit() else None
+                if size==int(width) and 1<=size<=65536:
+                    e=candidate.args[1]
+        if e.kind=='literal' and len(e.value)==2 and e.value[0]=="'" and width is not None:
+            filled=fill_literal(e.value[1],self.target,width,whole_assignment=True)
+            if filled is not None:return filled
         if e is not None and e.kind=='call' and e.value in getattr(self,'function_names',set()):
             return e.value+'('+', '.join(self.expr(a) for a in e.args)+')'
         def lower_fields(node):
-            if node.kind in ('index','slice') and node.args[0].kind=='field':
+            if node.kind in ('index','slice','part_select') and node.args[0].kind=='field':
                 field=node.args[0];typ=self.expr_type(field.args[0])
                 if field.value not in typ.fields:raise ParseError('unknown packed record field '+field.value)
                 _,_,offset=typ.fields[field.value];base=lower_fields(field.args[0])
@@ -391,6 +561,7 @@ class VerilogGenerator:
                     value=lower_fields(value)
                     return value if offset==0 else Expr('binary','+',[value,Expr('literal',str(offset))])
                 if node.kind=='index':return Expr('index',args=[base,shifted(node.args[1])])
+                if node.kind=='part_select':return Expr('part_select',node.value,[base,shifted(node.args[1]),lower_fields(node.args[2])])
                 return Expr('slice',args=[base,shifted(node.args[1]),shifted(node.args[2])])
             if node.kind=='field':
                 typ=self.expr_type(node.args[0])
@@ -414,6 +585,7 @@ class VerilogGenerator:
                     if any(e.kind=='literal' and len(e.value)==2 and e.value[0]=="'" for e in self.expr_nodes(d['value'])):raise ParseError('unsized fill on concatenated target requires known total width')
                 if d['target'].kind=='index': width=width_of(self.expr_type(d['target']))
                 elif d['target'].kind=='slice': width=width_of(Type(bounds=tuple(d['target'].args[1:])))
+                elif d['target'].kind=='part_select': width=width_of(self.expr_type(d['target']))
                 elif d['target'].kind=='field': width=width_of(self.expr_type(d['target']))
                 out.append(('assign ' if d['concurrent'] else '')+self.expr(d['target'])+' '+d['op']+' '+self.expr(d['value'],width)+';')
             elif k=='block':
@@ -444,7 +616,8 @@ class VerilogGenerator:
                     out+=self.indent(self.statements(d['otherwise'],context))+['end']
             elif k=='case':
                 qualifier=(d.get('qualifier','')+' ') if self.target=='systemverilog' and d.get('qualifier') else ''
-                out+=[qualifier+'case ('+self.expr(d['expression'])+')']
+                case_kw=d.get('case_kind','case')
+                out+=[qualifier+case_kw+' ('+self.expr(d['expression'])+')']
                 for index,(values,body) in enumerate(d['choices']):
                     out+=self.indent(decorate([(', '.join(self.expr(e) for e in values) if values else 'default')+': begin'],n,'choice_'+str(index))+self.indent(self.statements(body,context))+['end'])
                 out+=['endcase']
